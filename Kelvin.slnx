@@ -1,0 +1,10 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Kelvin.Core/Kelvin.Core.csproj" />
+    <Project Path="src/Kelvin.Hardware/Kelvin.Hardware.csproj" />
+    <Project Path="src/Kelvin.Service/Kelvin.Service.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Kelvin.Core.Tests/Kelvin.Core.Tests.csproj" />
+  </Folder>
+</Solution>

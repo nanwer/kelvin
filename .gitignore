@@ -1,0 +1,12 @@
+bin/
+obj/
+*.user
+.vs/
+.vscode/
+TestResults/
+desktop/target/
+desktop/gen/
+desktop/service-dist/
+desktop/deps/
+.claude/
+*.tmp
