@@ -14,7 +14,8 @@ public sealed record HardwareReportInput(
     bool LightingConnected,
     string? LightingStatus,
     IReadOnlyList<RgbDevice> Devices,
-    IReadOnlyList<Conflict> Conflicts);
+    IReadOnlyList<Conflict> Conflicts,
+    string? LaptopFanModes = null);
 
 public sealed record HardwareReportResult(string Title, string Body, string IssueUrl, bool BodyInUrl);
 
@@ -43,6 +44,7 @@ public static class HardwareReport
         b.AppendLine($"- Kelvin {input.Version}{(input.Simulated ? " (simulated hardware)" : "")}");
         b.AppendLine($"- {input.Os}");
         b.AppendLine($"- PawnIO driver: {(input.FanDriverInstalled ? "installed" : "missing")}");
+        if (input.LaptopFanModes is not null) b.AppendLine($"- Laptop fan modes: {Clean(input.LaptopFanModes)}");
         b.AppendLine();
 
         b.AppendLine("### Detected hardware");
@@ -89,8 +91,9 @@ public static class HardwareReport
         return new(title, body, IssueUrl(title, shortBody), false);
     }
 
+    // The issue template adds the "hardware-report" label for anyone, which the compatibility list uses.
     private static string IssueUrl(string title, string body) =>
-        $"{RepositoryUrl}/issues/new?labels=hardware-report&title={Uri.EscapeDataString(title)}&body={Uri.EscapeDataString(body)}";
+        $"{RepositoryUrl}/issues/new?template=hardware-report.md&title={Uri.EscapeDataString(title)}&body={Uri.EscapeDataString(body)}";
 
     private static void Table(StringBuilder b, string[] headers, IEnumerable<string[]> rows)
     {

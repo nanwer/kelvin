@@ -16,6 +16,18 @@ one app that controls fans and lighting together, and tells you when something e
 
 ## Features
 
+- **Profiles that switch themselves.** Quiet, Balanced, Gaming and Night, each a complete setup of
+  fan curves, lighting and (on laptops) fan mode. Kelvin switches when a game starts (one you list,
+  or whenever the graphics card is busy), on a night schedule, or with one click in the tray. Pick a
+  profile yourself and it holds until the situation changes.
+- **Laptops too.** Where a laptop runs its own fans, Kelvin switches its fan mode instead: Quiet,
+  Balanced, Performance, and Max fan on HP Omen. It uses HP Omen, ASUS ROG/TUF and Lenovo Legion
+  interfaces where available (experimental until confirmed per model), and Windows power modes on
+  any other laptop.
+- **Home Assistant and scripting.** Kelvin can publish temperatures, fan speeds and its profile to
+  Home Assistant over MQTT, where it appears as a device of its own. Home Assistant can switch
+  profiles but never set fan speeds. There's also a local HTTP API for scripts; see
+  [docs/API.md](docs/API.md).
 - **Fan curves you can see.** Pick BIOS, a fixed speed, or a temperature curve per fan. Drag points on
   a chart that sits on a blue-to-red heat scale, and watch the live operating point move.
 - **Smart setup.** *Measure fans* runs each fan from full speed to stopped (about 30 seconds) and
@@ -42,7 +54,8 @@ one app that controls fans and lighting together, and tells you when something e
   Every update is signed, and Kelvin refuses any that isn't.
 - **One-click hardware reports.** Settings → *Report my hardware* opens a GitHub issue listing what
   Kelvin detected (board, fan chip, fans, sensors, RGB devices). You see all of it first, and it
-  contains no serial numbers or personal details.
+  contains no serial numbers or personal details. Reports build the public
+  **[compatibility list](docs/COMPATIBILITY.md)**.
 
 | Fans | Lighting | Health |
 |---|---|---|

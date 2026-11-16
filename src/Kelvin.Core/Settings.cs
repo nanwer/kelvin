@@ -85,6 +85,12 @@ public sealed class KelvinSettings
     public LightingSettings Lighting { get; set; } = new();
     public SafetySettings Safety { get; set; } = new();
     public AlertSettings Alerts { get; set; } = new();
+    public List<Profile> Profiles { get; set; } = [];
+    public string? ActiveProfileId { get; set; }
+    public ProfileAutomation Automation { get; set; } = new();
+    /// <summary>Laptop fan mode Kelvin last set, so it can be restored after a restart.</summary>
+    public string? FanMode { get; set; }
+    public MqttSettings Mqtt { get; set; } = new();
     public List<FanProfile> FanProfiles { get; set; } = [];
     public List<string> DismissedRecommendations { get; set; } = [];
 }
@@ -137,11 +143,15 @@ public sealed class SettingsStore
         return new();
     }
 
+    /// <summary>Runs inside every save, after the change (used to keep the active profile in sync).</summary>
+    public Action<KelvinSettings>? BeforeSave { get; set; }
+
     public void Mutate(Action<KelvinSettings> change)
     {
         lock (_gate)
         {
             change(Current);
+            BeforeSave?.Invoke(Current);
             Directory.CreateDirectory(Path.GetDirectoryName(_path)!);
             var tmp = _path + ".tmp";
             File.WriteAllText(tmp, JsonSerializer.Serialize(Current, Json));
