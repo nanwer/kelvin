@@ -24,6 +24,12 @@ public sealed class LhmFanProvider : IFanProvider
     public IReadOnlyList<FanReading> Fans { get; private set; } = [];
     public IReadOnlyList<SensorReading> Sensors { get; private set; } = [];
 
+    public IReadOnlyList<HardwareInfo> Hardware =>
+        _computer.Hardware
+            .SelectMany(h => new[] { new HardwareInfo(h.HardwareType.ToString(), h.Name) }
+                .Concat(h.SubHardware.Select(s => new HardwareInfo(s.HardwareType.ToString(), s.Name, h.Name))))
+            .ToList();
+
     public void Open()
     {
         _computer.Open();

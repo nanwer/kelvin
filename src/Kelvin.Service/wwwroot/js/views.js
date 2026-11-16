@@ -1,4 +1,4 @@
-import { api, toast, go } from './app.js';
+import { api, toast, go, getUpdate, canUpdate, checkForUpdate, installUpdate } from './app.js';
 import { icon } from './icons.js';
 import { createCurveEditor } from './curve.js';
 import {
@@ -13,6 +13,12 @@ const ROLE_NAME = { cpu: 'CPU', gpu: 'Graphics card', board: 'Motherboard' };
 
 function banners(state, { showSimulated = false } = {}) {
   const out = [];
+  const update = getUpdate();
+  if (update) {
+    out.push(`<div class="banner info">${icon('advice')}<div class="grow"><strong>Kelvin ${esc(update.version)} is available</strong>
+      <p>You have ${esc(update.currentVersion)}. Updating takes under a minute. Your fans go back to BIOS control for those few seconds, then Kelvin picks up where it left off.</p></div>
+      <button class="btn sm primary" data-install-update>Update now</button></div>`);
+  }
   if (state.safety.override) {
     out.push(`<div class="banner crit" role="alert">${icon('shield')}<div class="grow"><strong>Safety override</strong><p>${esc(state.safety.reason)}</p></div></div>`);
   }
@@ -93,6 +99,13 @@ async function run(action, ok) {
   try { await action(); if (ok) toast(ok); } catch (e) { toast(e.message, true); }
 }
 
+// Opens a link in the user's browser: through the desktop shell in the app, a new tab otherwise.
+async function openExternal(url) {
+  const invoke = window.__TAURI__?.core?.invoke;
+  if (invoke) await invoke('plugin:opener|open_url', { url });
+  else window.open(url, '_blank', 'noopener');
+}
+
 async function closeConflicts(keys, names) {
   const msg = `Close ${names}?\n\nKelvin will quit ${keys.length > 1 ? 'these apps and their background services' : 'it and its background service'} so they stop overriding your lighting. Anything saved to your devices' onboard memory keeps working.`;
   if (!confirm(msg)) return;
@@ -110,6 +123,8 @@ async function closeConflicts(keys, names) {
 document.addEventListener('click', (e) => {
   const b = e.target.closest('[data-close-conflicts]');
   if (b) closeConflicts(b.dataset.closeConflicts.split(','), b.dataset.names);
+  const u = e.target.closest('[data-install-update]');
+  if (u) { u.disabled = true; u.textContent = 'Updating…'; installUpdate(); }
 });
 
 // ---------------------------------------------------------------- Overview
@@ -448,9 +463,23 @@ const EFFECTS = [
   ['off', 'Off'], ['static', 'Static'], ['breathing', 'Breathing'], ['spectrum', 'Spectrum'], ['temperature', 'Temperature'],
 ];
 
+const COLOR_MODES = [['follow', 'Follow effect'], ['solid', 'Solid color'], ['gradient', 'Gradient'], ['off', 'Off']];
+
+// Color settings for one device or zone: a mode, plus one or two colors when it has its own.
+function colorControls(own, devId, zone, label) {
+  const mode = own?.mode ?? 'follow';
+  return `<div class="color-ctl" data-dev="${esc(devId)}" data-zone="${esc(zone ?? '')}">
+    <select class="sm" aria-label="Colors for ${esc(label)}">
+      ${COLOR_MODES.map(([v, l]) => `<option value="${v}" ${v === mode ? 'selected' : ''}>${l}</option>`).join('')}
+    </select>
+    ${mode === 'solid' || mode === 'gradient' ? `<input type="color" class="cpick" data-c="color" value="${esc(own.color)}" aria-label="${mode === 'gradient' ? 'Start color' : 'Color'} for ${esc(label)}">` : ''}
+    ${mode === 'gradient' ? `<span class="faint" aria-hidden="true">→</span><input type="color" class="cpick" data-c="color2" value="${esc(own.color2)}" aria-label="End color for ${esc(label)}">` : ''}
+  </div>`;
+}
+
 function lightingView(root) {
   root.innerHTML = `<div class="page">
-    <header class="page-head"><div><h1>Lighting</h1><p>One effect across every device. Changes apply as you make them.</p></div></header>
+    <header class="page-head"><div><h1>Lighting</h1><p>One effect across every device, or give any device or zone its own colors. Changes apply as you make them.</p></div></header>
     <div class="stack" id="lx-banners"></div>
     <div id="lx-body"></div>
   </div>`;
@@ -460,6 +489,7 @@ function lightingView(root) {
   let lastState = null;
   let structureKey = '';
   let bannerKey = '';
+  const expanded = new Set(); // devices whose zones are shown
 
   const push = debounce(async () => {
     try { await api('PUT', '/lighting', draft); } catch (e) { toast(e.message, true); }
@@ -513,13 +543,26 @@ function lightingView(root) {
       </section>
       <section class="panel">
         <div class="panel-head"><h2>Devices</h2><span class="meta">Turn one off to let another app drive it</span></div>
-        <div id="lx-devices">${state.devices.map((dev) => `
-          <div class="device ${dev.included ? '' : 'off'}" data-id="${esc(dev.id)}">
-            <div><strong>${esc(dev.name)}</strong><span class="faint">${esc(dev.vendor)} · ${esc(dev.kind)} · ${dev.ledCount} LEDs</span></div>
-            ${ledStrip(state.preview[dev.id], dev.ledCount)}
-            <label class="switch" title="${dev.included ? 'Kelvin controls this device' : 'Kelvin leaves this device alone'}">
-              <input type="checkbox" ${dev.included ? 'checked' : ''} aria-label="Kelvin controls ${esc(dev.name)}"><span></span></label>
-          </div>`).join('') || '<div class="empty"><strong>No lighting devices found</strong><span>OpenRGB is running but didn\'t report any devices. Try Rescan Devices in OpenRGB.</span></div>'}
+        <div id="lx-devices">${state.devices.map((dev) => {
+          const own = d.devices?.[dev.id];
+          const zones = dev.zones ?? [];
+          const open = expanded.has(dev.id);
+          return `<div class="device-block ${dev.included ? '' : 'off'}" data-id="${esc(dev.id)}">
+            <div class="device ${dev.included ? '' : 'off'}" data-id="${esc(dev.id)}">
+              <div><strong>${esc(dev.name)}</strong><span class="faint">${esc(dev.vendor)} · ${esc(dev.kind)} · ${dev.ledCount} LEDs</span></div>
+              ${ledStrip(state.preview[dev.id], dev.ledCount)}
+              <label class="switch" title="${dev.included ? 'Kelvin controls this device' : 'Kelvin leaves this device alone'}">
+                <input type="checkbox" class="include" ${dev.included ? 'checked' : ''} aria-label="Kelvin controls ${esc(dev.name)}"><span></span></label>
+            </div>
+            ${dev.included ? `<div class="device-sub">
+              ${colorControls(own, dev.id, null, dev.name)}
+              ${zones.length > 1 ? `<button type="button" class="btn sm ghost" data-zones aria-expanded="${open}">${open ? 'Hide zones' : `Zones (${zones.length})`}</button>` : ''}
+            </div>
+            ${open ? `<div class="zone-list">${zones.map((z) => `
+              <div class="zone-row"><span>${esc(z.name)} <span class="faint">· ${z.ledCount} LED${z.ledCount === 1 ? '' : 's'}</span></span>
+                ${colorControls(own?.zones?.[z.name], dev.id, z.name, `${dev.name} ${z.name}`)}</div>`).join('')}</div>` : ''}` : ''}
+          </div>`;
+        }).join('') || '<div class="empty"><strong>No lighting devices found</strong><span>OpenRGB is running but didn\'t report any devices.</span></div>'}
         </div>
       </section>
     </div>`;
@@ -540,15 +583,43 @@ function lightingView(root) {
         change((x) => { x[key] = Number(input.value) / 100; });
       });
     }
-    body.querySelector('#lx-devices').addEventListener('change', (e) => {
-      const row = e.target.closest('.device'); if (!row) return;
-      const id = row.dataset.id;
-      change((x) => {
-        x.excludedDeviceIds = x.excludedDeviceIds.filter((v) => v !== id);
-        if (!e.target.checked) x.excludedDeviceIds.push(id);
-      });
-      row.classList.toggle('off', !e.target.checked);
+    const list = body.querySelector('#lx-devices');
+    list.addEventListener('change', (e) => {
+      if (e.target.matches('.include')) {
+        const id = e.target.closest('.device-block').dataset.id;
+        change((x) => {
+          x.excludedDeviceIds = x.excludedDeviceIds.filter((v) => v !== id);
+          if (!e.target.checked) x.excludedDeviceIds.push(id);
+        }, true);
+        return;
+      }
+      const ctl = e.target.closest('.color-ctl');
+      if (ctl && e.target.matches('select')) {
+        change((x) => { ownColors(x, ctl.dataset.dev, ctl.dataset.zone || null).mode = e.target.value; }, true);
+      }
     });
+    list.addEventListener('input', (e) => {
+      const ctl = e.target.closest('.color-ctl');
+      if (ctl && e.target.matches('.cpick')) {
+        change((x) => { ownColors(x, ctl.dataset.dev, ctl.dataset.zone || null)[e.target.dataset.c] = e.target.value; });
+      }
+    });
+    list.addEventListener('click', (e) => {
+      const b = e.target.closest('[data-zones]'); if (!b) return;
+      const id = b.closest('.device-block').dataset.id;
+      if (expanded.has(id)) expanded.delete(id); else expanded.add(id);
+      render();
+    });
+  }
+
+  // The color settings for a device, or one of its zones, created on first use. New overrides
+  // start from the current effect color, so switching to "Solid" doesn't jump to a random color.
+  function ownColors(x, devId, zone) {
+    x.devices ??= {};
+    const dev = x.devices[devId] ??= { mode: 'follow', color: x.color, color2: '#3d7bff', zones: {} };
+    dev.zones ??= {};
+    if (zone == null) return dev;
+    return dev.zones[zone] ??= { mode: 'follow', color: dev.mode === 'follow' ? x.color : dev.color, color2: dev.color2 ?? '#3d7bff' };
   }
 
   return {
@@ -562,6 +633,93 @@ function lightingView(root) {
       const key = JSON.stringify([state.system.rgbConnected, state.system.openRgb, state.devices.map((d) => [d.id, d.included]), draft]);
       if (!editing && key !== structureKey) { structureKey = key; render(); }
       for (const d of state.devices) updateLeds(root.querySelector(`.device[data-id="${CSS.escape(d.id)}"] .leds`), state.preview[d.id]);
+    },
+  };
+}
+
+// ---------------------------------------------------------------- Health
+
+const BAND_LABEL = { idle: 'Idle', light: 'Light load', medium: 'Medium load', heavy: 'Heavy load' };
+const STATUS_TAG = {
+  warmer: ['warn', 'Running hotter'],
+  cooler: ['ok', 'Running cooler'],
+  ok: ['ok', 'Healthy'],
+  learning: ['', 'Learning'],
+  settingsChanged: ['', 'Re-learning'],
+};
+
+// Daily temperature-above-board for the most common load, with "then" and "now" windows shaded.
+function healthChart(part) {
+  const pts = part.trend;
+  if (pts.length < 2) return '<p class="faint">The chart appears after a couple of days of normal use.</p>';
+  // Drawn at roughly the size it's shown, so labels stay at body-text size on wide screens.
+  const W = 1040, H = 240, L = 44, R = 12, T = 20, B = 28;
+  const day = (d) => Date.parse(d) / 86400000;
+  const today = Math.floor(Date.now() / 86400000);
+  const x0 = Math.min(day(pts[0].date), today - 45), x1 = today;
+  const vals = pts.map((p) => p.rise);
+  const lo = Math.floor(Math.min(...vals) - 2), hi = Math.ceil(Math.max(...vals) + 2);
+  const x = (d) => L + ((d - x0) / Math.max(x1 - x0, 1)) * (W - L - R);
+  const y = (v) => T + (1 - (v - lo) / Math.max(hi - lo, 1)) * (H - T - B);
+  const span = (a, b, label) => `<rect x="${x(a)}" y="${T}" width="${Math.max(x(b) - x(a), 0)}" height="${H - T - B}" fill="#7aa7ff" fill-opacity="0.07"/>
+    <text x="${(x(a) + x(b)) / 2}" y="${T - 6}" fill="#8189a3" font-size="11.5" text-anchor="middle">${label}</text>`;
+  let grid = '';
+  const step = Math.max(2, Math.round((hi - lo) / 4));
+  for (let v = Math.ceil(lo / step) * step; v <= hi; v += step) {
+    grid += `<line x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}" stroke="#252a39"/><text x="${L - 8}" y="${y(v) + 4}" fill="#8189a3" font-size="11.5" text-anchor="end">+${v}°</text>`;
+  }
+  const line = pts.map((p, i) => `${i ? 'L' : 'M'}${x(day(p.date)).toFixed(1)},${y(p.rise).toFixed(1)}`).join(' ');
+  const last = pts.at(-1);
+  const color = part.status === 'warmer' ? '#f2b84b' : '#7aa7ff';
+  return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(part.name)} temperature above the motherboard, by day">
+    ${span(today - 45, today - 14, 'then')}${span(today - 7, today, 'now')}
+    ${grid}
+    <path d="${line}" fill="none" stroke="${color}" stroke-width="2" stroke-linejoin="round"/>
+    <circle cx="${x(day(last.date))}" cy="${y(last.rise)}" r="4" fill="${color}"/>
+    <text x="${L}" y="${H - 6}" fill="#8189a3" font-size="11.5">${new Date(Date.parse(pts[0].date)).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}</text>
+    <text x="${W - R}" y="${H - 6}" fill="#8189a3" font-size="11.5" text-anchor="end">today</text>
+  </svg>`;
+}
+
+function healthView(root) {
+  root.innerHTML = `<div class="page">
+    <header class="page-head"><div><h1>Health</h1>
+      <p>Kelvin compares how hot your parts run at the same load, week by week, to catch dust build-up or drying thermal paste before it becomes a problem.</p></div></header>
+    <div class="stack" id="hx-parts"></div>
+  </div>`;
+  let key = '';
+
+  return {
+    update(state) {
+      const h = state.health;
+      const k = JSON.stringify(h?.parts);
+      if (k === key) return;
+      key = k;
+      const host = root.querySelector('#hx-parts');
+      if (!h) { host.innerHTML = '<section class="panel"><div class="empty"><strong>Checking…</strong></div></section>'; return; }
+      host.innerHTML = h.parts.map((p) => {
+        const [tone, label] = STATUS_TAG[p.status] ?? ['', p.status];
+        const learning = p.status === 'learning' && p.daysCollected < p.daysNeeded;
+        const unit = p.relativeToBoard ? '°C above motherboard' : '°C';
+        return `<section class="panel">
+          <div class="panel-head"><h2>${esc(p.name)}</h2><span class="tag ${tone}">${label}</span></div>
+          <div class="panel-body stack" style="gap:18px">
+            <div><strong class="health-headline">${esc(p.headline)}</strong><p class="muted" style="margin-top:4px;max-width:75ch">${esc(p.detail)}</p></div>
+            ${learning ? `<div class="field"><span class="label">Day ${p.daysCollected} of ${p.daysNeeded}</span>
+              <div class="progress"><i style="width:${(p.daysCollected / p.daysNeeded) * 100}%"></i></div></div>` : ''}
+            ${p.trendBand ? `<div class="field"><span class="label">Daily average at ${esc((BAND_LABEL[p.trendBand] ?? p.trendBand).toLowerCase())}, ${unit}</span>
+              <div class="health-chart">${healthChart(p)}</div></div>` : ''}
+            ${p.bands.length ? `<table class="health-table"><thead><tr><th>Load</th><th class="num">Then</th><th class="num">Now</th><th class="num">Change</th></tr></thead><tbody>
+              ${p.bands.map((b) => `<tr>
+                <td>${BAND_LABEL[b.band] ?? b.band}</td>
+                <td class="num">+${b.thenRise.toFixed(1)}°</td>
+                <td class="num">+${b.nowRise.toFixed(1)}°</td>
+                <td class="num">${b.compared
+                  ? `<span class="${b.change >= 4 ? 'delta-up' : b.change <= -4 ? 'delta-down' : ''}">${b.change > 0 ? '+' : ''}${b.change.toFixed(1)}°</span>`
+                  : `<span class="faint">${esc(b.skipped)}</span>`}</td></tr>`).join('')}
+            </tbody></table>` : ''}
+          </div></section>`;
+      }).join('');
     },
   };
 }
@@ -653,11 +811,60 @@ function settingsView(root) {
         <div><strong>Closing the window</strong><span class="faint">Kelvin stays in the tray. Your fan curves and lighting are run by Kelvin's background service, so they keep working even after you quit the app. If that service ever stops, fans go back to your BIOS settings.</span></div>
       </div>
     </section>
+    <section class="panel" id="st-updates" hidden>
+      <div class="panel-head"><h2>Updates</h2><span class="meta" id="st-version"></span></div>
+      <div class="device">
+        <div><strong id="st-update-title">Kelvin keeps itself up to date</strong>
+          <span class="faint" id="st-update-detail">It checks GitHub for new versions a few times a day. Every update is signed, and Kelvin refuses any that isn't.</span></div>
+        <span></span>
+        <div class="actions"><button class="btn sm" id="st-check">Check now</button><button class="btn sm primary" id="st-install" hidden>Update now</button></div>
+      </div>
+    </section>
     <section class="panel">
       <div class="panel-head"><h2>Hardware</h2></div>
       <table><tbody id="st-hw"></tbody></table>
     </section>
+    <section class="panel">
+      <div class="panel-head"><h2>Help support more hardware</h2></div>
+      <div class="panel-body stack">
+        <p class="muted" style="max-width:72ch">Kelvin learns about new boards and devices from the people who use them. Sharing what Kelvin found on your PC helps everyone with the same hardware. You'll see exactly what's included before anything is sent.</p>
+        <div class="actions"><button class="btn" id="st-report">Report my hardware</button></div>
+        <div id="st-report-preview" class="stack" style="gap:12px" hidden>
+          <p class="faint">This is everything that will be shared: model names and readings only. No serial numbers, user names or file paths. It opens as a GitHub issue you can edit before posting.</p>
+          <pre class="report" tabindex="0"></pre>
+          <div class="actions"><button class="btn primary" id="st-report-open">Open GitHub issue</button><button class="btn" id="st-report-copy">Copy</button></div>
+        </div>
+      </div>
+    </section>
   </div>`;
+
+  if (canUpdate()) {
+    root.querySelector('#st-updates').hidden = false;
+    root.querySelector('#st-check').addEventListener('click', async (e) => {
+      e.target.disabled = true; e.target.textContent = 'Checking…';
+      await checkForUpdate(true);
+      e.target.disabled = false; e.target.textContent = 'Check now';
+    });
+    root.querySelector('#st-install').addEventListener('click', (e) => {
+      e.target.disabled = true; e.target.textContent = 'Updating…'; installUpdate();
+    });
+  }
+
+  let report = null;
+  root.querySelector('#st-report').addEventListener('click', () => run(async () => {
+    report = await api('GET', '/report');
+    const box = root.querySelector('#st-report-preview');
+    box.querySelector('.report').textContent = report.body;
+    box.hidden = false;
+    box.querySelector('.report').focus();
+  }));
+  root.querySelector('#st-report-copy').addEventListener('click', () => run(
+    () => navigator.clipboard.writeText(report.body), 'Report copied'));
+  root.querySelector('#st-report-open').addEventListener('click', () => run(async () => {
+    // Too long for a link: the issue asks for a paste, so the report goes on the clipboard first.
+    if (!report.bodyInUrl) { await navigator.clipboard.writeText(report.body); toast('Report copied. Paste it into the issue.'); }
+    await openExternal(report.issueUrl);
+  }));
 
   // Desktop-only settings, through the Tauri shell.
   const invoke = window.__TAURI__?.core?.invoke;
@@ -685,6 +892,13 @@ function settingsView(root) {
         loaded = true;
       }
       const s = state.system;
+      root.querySelector('#st-version').textContent = `Version ${s.version}`;
+      const u = getUpdate();
+      root.querySelector('#st-install').hidden = !u;
+      if (u) {
+        root.querySelector('#st-update-title').textContent = `Kelvin ${u.version} is available`;
+        root.querySelector('#st-update-detail').textContent = u.notes ? u.notes.split('\n')[0] : 'Updating takes under a minute.';
+      }
       root.querySelector('#st-hw').innerHTML = `
         <tr><td>Fans and sensors</td><td>${esc(s.fanBackend)}</td><td class="muted">${s.simulated ? (s.elevated ? 'Started with --simulate' : 'Run as administrator for real hardware') : 'Connected'}</td></tr>
         <tr><td>Lighting</td><td>${esc(s.rgbBackend)}</td><td class="muted">${s.rgbConnected ? `${state.devices.length} devices` : esc(s.rgbStatus ?? 'Not connected')}</td></tr>`;
@@ -696,6 +910,7 @@ export const views = {
   overview: (root) => { const v = overview(root); bindRowLinks(root.firstElementChild); return v; },
   fans: fansView,
   lighting: lightingView,
+  health: healthView,
   advice: adviceView,
   settings: settingsView,
 };

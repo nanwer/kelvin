@@ -63,6 +63,7 @@ public class FanEngineTests
         public IReadOnlyList<FanReading> Fans => [new("fan", "CPU Fan", 1000, Duty["fan"], true, false)];
         public IReadOnlyList<SensorReading> Sensors =>
             [new("cpu", "CPU", "AMD Ryzen 7 5800X", SensorRole.Cpu, SensorKind.Temperature, CpuTemp, "°C", true)];
+        public IReadOnlyList<HardwareInfo> Hardware => [];
         public void Open() { }
         public void Update() { }
         public void SetFanPercent(string fanId, double percent) => Duty[fanId] = percent;

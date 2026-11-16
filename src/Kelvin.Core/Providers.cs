@@ -12,6 +12,8 @@ public interface IFanProvider : IDisposable
     void Update();
     IReadOnlyList<FanReading> Fans { get; }
     IReadOnlyList<SensorReading> Sensors { get; }
+    /// <summary>What was detected (e.g. "SuperIO: Nuvoton NCT6798D"), for hardware reports.</summary>
+    IReadOnlyList<HardwareInfo> Hardware { get; }
     void SetFanPercent(string fanId, double percent);
     /// <summary>Hand the fan back to the BIOS / firmware curve.</summary>
     void RestoreDefault(string fanId);

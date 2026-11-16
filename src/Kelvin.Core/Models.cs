@@ -102,6 +102,8 @@ public sealed record RgbColor(byte R, byte G, byte B)
     }
 }
 
+public sealed record HardwareInfo(string Kind, string Name, string? Parent = null);
+
 public sealed record RgbZone(string Name, int LedCount);
 
 public sealed record RgbDevice(

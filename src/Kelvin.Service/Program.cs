@@ -37,15 +37,19 @@ builder.Services.ConfigureHttpJsonOptions(o =>
     o.SerializerOptions.NumberHandling = JsonNumberHandling.AllowNamedFloatingPointLiterals;
 });
 
-var store = new SettingsStore(Environment.GetEnvironmentVariable("KELVIN_SETTINGS")
-    ?? (asService ? SettingsStore.MachinePath() : SettingsStore.DefaultPath()));
+var settingsPath = Environment.GetEnvironmentVariable("KELVIN_SETTINGS")
+    ?? (asService ? SettingsStore.MachinePath() : SettingsStore.DefaultPath());
+var store = new SettingsStore(settingsPath);
+// Demo mode never touches real history: it starts from five weeks of made-up data instead.
+var thermal = new ThermalHistory(demo ? null : ThermalHistory.PathNextTo(settingsPath));
+if (demo) thermal.SeedDemo();
 IFanProvider fanHw = simulate ? new SimulatedFanProvider() : new LhmFanProvider();
 IRgbProvider rgbHw = simulate ? new SimulatedRgbProvider() : new OpenRgbProvider();
 var fans = new FanEngine(fanHw, store);
 var lighting = new LightingEngine(rgbHw, store, () => fans.Sensors);
 // With real hardware, Kelvin runs OpenRGB itself so lighting works without the user opening it.
 var openRgbHost = simulate ? null : new OpenRgbHost();
-var runtime = new Runtime(fanHw, rgbHw, fans, lighting, store, elevated, openRgbHost, demo);
+var runtime = new Runtime(fanHw, rgbHw, fans, lighting, store, elevated, openRgbHost, thermal, demo);
 
 builder.Services.AddSingleton(runtime);
 builder.Services.AddHostedService(_ => runtime);
@@ -85,6 +89,7 @@ app.UseStaticFiles();
 var api = app.MapGroup("/api");
 
 api.MapGet("/state", (Runtime rt) => rt.Snapshot());
+api.MapGet("/report", (Runtime rt) => rt.Report());
 
 api.Map("/live", async (HttpContext ctx, Runtime rt, IHostApplicationLifetime life) =>
 {
@@ -137,7 +142,21 @@ api.MapPost("/fans/calibrate", (Runtime rt) => rt.StartCalibration()
 
 api.MapPut("/lighting", (LightingSettings body, Runtime rt) =>
 {
-    try { RgbColor.FromHex(body.Color); }
+    try
+    {
+        RgbColor.FromHex(body.Color);
+        body.Devices ??= new();
+        foreach (var d in body.Devices.Values)
+        {
+            d.Zones ??= new();
+            foreach (var o in d.Zones.Values.Prepend(d)) { RgbColor.FromHex(o.Color); RgbColor.FromHex(o.Color2); }
+        }
+        // Keep the file tidy: drop entries that just follow the effect.
+        foreach (var d in body.Devices.Values)
+            foreach (var z in d.Zones.Where(z => z.Value.Mode == ColorMode.Follow).Select(z => z.Key).ToList()) d.Zones.Remove(z);
+        foreach (var id in body.Devices.Where(d => d.Value.Mode == ColorMode.Follow && d.Value.Zones.Count == 0).Select(d => d.Key).ToList())
+            body.Devices.Remove(id);
+    }
     catch (FormatException ex) { return Results.BadRequest(new { error = ex.Message }); }
     body.Brightness = Math.Clamp(body.Brightness, 0, 1);
     body.Speed = Math.Clamp(body.Speed, 0, 1);
