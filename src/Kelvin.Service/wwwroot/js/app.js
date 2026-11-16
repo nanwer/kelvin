@@ -5,6 +5,7 @@ const ROUTES = [
   { id: 'overview', label: 'Overview' },
   { id: 'fans', label: 'Fans' },
   { id: 'lighting', label: 'Lighting' },
+  { id: 'health', label: 'Health' },
   { id: 'advice', label: 'Advice' },
   { id: 'settings', label: 'Settings' },
 ];
@@ -48,6 +49,37 @@ export function toast(message, isError = false) {
 }
 
 export const getState = () => state;
+
+// ---- Updates (desktop app only: the Tauri shell checks GitHub Releases and verifies signatures)
+const tauriInvoke = window.__TAURI__?.core?.invoke;
+let update = null; // { version, currentVersion, notes } when a newer Kelvin exists
+export const getUpdate = () => update;
+export const canUpdate = () => Boolean(tauriInvoke);
+
+export async function checkForUpdate(manual = false) {
+  if (!tauriInvoke) return null;
+  try {
+    update = await tauriInvoke('check_for_update');
+    if (manual && !update) toast('You have the latest version of Kelvin');
+  } catch (e) {
+    // Automatic checks fail quietly (offline, GitHub down); a manual check says why.
+    if (manual) toast(`Couldn't check for updates: ${e}`, true);
+  }
+  if (state) current?.view.update(state);
+  return update;
+}
+
+export async function installUpdate() {
+  if (!tauriInvoke) return;
+  toast(`Downloading Kelvin ${update?.version ?? ''}…`);
+  try { await tauriInvoke('install_update'); } // the app restarts when this succeeds
+  catch (e) { toast(String(e), true); }
+}
+
+if (tauriInvoke) {
+  setTimeout(() => checkForUpdate(), 10_000);
+  setInterval(() => checkForUpdate(), 6 * 60 * 60 * 1000);
+}
 
 function parseHash() {
   const [, id = 'overview', ...rest] = location.hash.split('/');

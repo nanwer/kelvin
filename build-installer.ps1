@@ -8,12 +8,26 @@
 # Requires: .NET 10 SDK, Rust, Tauri CLI (cargo install tauri-cli --version "^2" --locked),
 # and the MSVC C++ Build Tools.
 #
-# Usage:  ./build-installer.ps1
+# Updates: if the updater key is available (TAURI_SIGNING_PRIVATE_KEY, or the files in
+# %USERPROFILE%\.kelvin-signing), the build also writes <installer>.sig and latest.json for the
+# auto-updater. Without the key it builds a normal installer and skips them.
+#
+# Usage:  ./build-installer.ps1 [-NoUpdateManifest]
+#         -NoUpdateManifest: CI signs and writes the manifest after code signing instead.
 # Output: <cargo target dir>\release\bundle\nsis\Kelvin_<version>_x64-setup.exe
+
+param([switch]$NoUpdateManifest)
 
 # Native tools (cargo, dotnet) print progress on stderr, which Windows PowerShell 5.1 would treat as
 # a terminating error under 'Stop'. Each step checks $LASTEXITCODE instead.
 $ErrorActionPreference = 'Continue'
+
+$keyDir = Join-Path $env:USERPROFILE '.kelvin-signing'
+if (-not $env:TAURI_SIGNING_PRIVATE_KEY -and (Test-Path (Join-Path $keyDir 'updater.key'))) {
+  $env:TAURI_SIGNING_PRIVATE_KEY = Get-Content (Join-Path $keyDir 'updater.key') -Raw
+  $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = Get-Content (Join-Path $keyDir 'password.txt') -Raw
+}
+$canSignUpdates = [bool]$env:TAURI_SIGNING_PRIVATE_KEY
 $root = $PSScriptRoot
 $serviceOut = Join-Path $root 'desktop\service-dist'
 $deps = Join-Path $root 'desktop\deps'
@@ -72,7 +86,14 @@ Remove-Item -Recurse -Force (Join-Path $serviceOut 'wwwroot') -ErrorAction Silen
 Write-Host '==> Building the desktop app and installer' -ForegroundColor Cyan
 Push-Location (Join-Path $root 'desktop')
 try {
-  cargo tauri build
+  if ($canSignUpdates) {
+    cargo tauri build
+  } else {
+    Write-Host '    no updater key: building without update artifacts' -ForegroundColor Yellow
+    $noUpdater = Join-Path $deps 'cache\no-updater.json'
+    Set-Content $noUpdater '{ "bundle": { "createUpdaterArtifacts": false } }' -Encoding ascii
+    cargo tauri build --config $noUpdater
+  }
   if ($LASTEXITCODE -ne 0) { throw 'cargo tauri build failed' }
 } finally {
   Pop-Location
@@ -81,3 +102,7 @@ try {
 $target = if ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { Join-Path $root 'desktop\target' }
 $installer = Get-ChildItem (Join-Path $target 'release\bundle\nsis\*-setup.exe') | Sort-Object LastWriteTime | Select-Object -Last 1
 Write-Host "==> Installer: $($installer.FullName) ($([math]::Round($installer.Length / 1MB, 1)) MB)" -ForegroundColor Green
+
+if ($canSignUpdates -and -not $NoUpdateManifest) {
+  & (Join-Path $root 'scripts\update-manifest.ps1') -Installer $installer.FullName
+}

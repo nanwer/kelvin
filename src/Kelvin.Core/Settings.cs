@@ -29,8 +29,28 @@ public sealed class FanSettings
 
 public enum LightingEffect { Off, Static, Breathing, Spectrum, Temperature }
 
+/// <summary>How one device or zone is colored: by the global effect, or on its own.</summary>
+public enum ColorMode { Follow, Solid, Gradient, Off }
+
+public class ColorOverride
+{
+    public ColorMode Mode { get; set; } = ColorMode.Follow;
+    public string Color { get; set; } = "#ff8a3d";
+    /// <summary>End color for gradients, which run from the first LED to the last.</summary>
+    public string Color2 { get; set; } = "#3d7bff";
+}
+
+public sealed class DeviceLighting : ColorOverride
+{
+    /// <summary>Per-zone colors by zone name. A zone's own setting beats the device's.</summary>
+    public Dictionary<string, ColorOverride> Zones { get; set; } = new();
+}
+
 public sealed class LightingSettings
 {
+    /// <summary>Per-device colors by device id. Devices not listed follow the effect.</summary>
+    public Dictionary<string, DeviceLighting> Devices { get; set; } = new();
+
     public LightingEffect Effect { get; set; } = LightingEffect.Static;
     public string Color { get; set; } = "#ff8a3d";
     public double Brightness { get; set; } = 0.8;

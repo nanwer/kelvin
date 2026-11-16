@@ -24,9 +24,18 @@ public static class Advisor
         IReadOnlyList<FanReading> fans,
         IReadOnlyList<SensorReading> sensors,
         KelvinSettings settings,
-        IReadOnlyList<Conflict> conflicts)
+        IReadOnlyList<Conflict> conflicts,
+        HealthReport? health = null)
     {
         var recs = new List<Recommendation>();
+
+        foreach (var part in health?.Parts ?? [])
+        {
+            if (part.Status == HealthStatus.Warmer)
+                recs.Add(new($"health:{part.Key}", Severity.Warning, part.Headline, part.Detail, RecommendationAction.None));
+            else if (part.Status == HealthStatus.Cooler)
+                recs.Add(new($"health:{part.Key}", Severity.Info, part.Headline, part.Detail, RecommendationAction.None));
+        }
 
         foreach (var c in conflicts)
             recs.Add(new($"conflict:{c.Key}", Severity.Warning, $"{c.Name} is running", $"{c.Impact} {c.Fix}",

@@ -1,6 +1,6 @@
 [package]
 name = "kelvin-desktop"
-version = "0.1.0"
+version = "0.2.0"
 description = "Kelvin: fans and RGB lighting in one app"
 edition = "2021"
 publish = false
@@ -13,9 +13,13 @@ path = "src/main.rs"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
 tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-autostart = "2"
+tauri-plugin-opener = "2.7.3"
 tauri-plugin-single-instance = "2"
+tauri-plugin-updater = "2.14.1"
 
 [profile.release]
 codegen-units = 1

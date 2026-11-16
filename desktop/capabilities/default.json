@@ -3,5 +3,12 @@
   "identifier": "default",
   "description": "What the Kelvin window may ask the desktop shell to do.",
   "windows": ["main"],
-  "permissions": ["core:default", "autostart:default"]
+  "permissions": [
+    "core:default",
+    "autostart:default",
+    {
+      "identifier": "opener:allow-open-url",
+      "allow": [{ "url": "https://github.com/nanwer/kelvin/*" }]
+    }
+  ]
 }

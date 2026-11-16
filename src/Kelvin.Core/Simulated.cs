@@ -35,6 +35,13 @@ public sealed class SimulatedFanProvider : IFanProvider
 
     public string Name => "Simulated";
     public bool IsSimulated => true;
+    public IReadOnlyList<HardwareInfo> Hardware { get; } =
+    [
+        new("Motherboard", "ROG STRIX B550-I GAMING"),
+        new("SuperIO", "Nuvoton NCT6798D (simulated)", "ROG STRIX B550-I GAMING"),
+        new("Cpu", "AMD Ryzen 7 5800X"),
+        new("GpuAmd", "AMD Radeon RX 9070 XT"),
+    ];
     public IReadOnlyList<FanReading> Fans { get; private set; } = [];
     public IReadOnlyList<SensorReading> Sensors { get; private set; } = [];
 

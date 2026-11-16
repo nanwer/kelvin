@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Kelvin",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "identifier": "dev.kelvin.desktop",
   "build": {
     "frontendDist": "../src/Kelvin.Service/wwwroot"
@@ -24,9 +24,17 @@
       "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost http://127.0.0.1:5577 ws://127.0.0.1:5577; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'"
     }
   },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDI1RjRDMTg5RTFGOUUxRUEKUldUcTRmbmhpY0gwSlN1RWxsV1FhaHQvbmRiQ09PYjVmVGpCNVA2S2hmMmJFckx1ODRCYm92VlgK",
+      "endpoints": ["https://github.com/nanwer/kelvin/releases/latest/download/latest.json"],
+      "windows": { "installMode": "passive" }
+    }
+  },
   "bundle": {
     "active": true,
     "targets": ["nsis"],
+    "createUpdaterArtifacts": true,
     "publisher": "Kelvin contributors",
     "shortDescription": "Fans and RGB lighting in one app",
     "category": "Utility",

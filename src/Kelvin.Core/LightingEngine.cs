@@ -97,12 +97,46 @@ public sealed class LightingEngine
                 };
             }
 
+            // Per-device colors, then per-zone colors on top (a zone's own setting wins).
+            if (cfg.Devices.TryGetValue(device.Id, out var own))
+            {
+                Paint(frame, 0, frame.Length, own, brightness);
+                var start = 0;
+                foreach (var zone in device.Zones)
+                {
+                    if (own.Zones.TryGetValue(zone.Name, out var zoneOwn))
+                        Paint(frame, start, Math.Min(zone.LedCount, frame.Length - start), zoneOwn, brightness);
+                    start += zone.LedCount;
+                    if (start >= frame.Length) break;
+                }
+            }
+
             lock (_gate)
             {
                 if (_frames.TryGetValue(device.Id, out var prev) && prev.SequenceEqual(frame)) continue;
                 _frames[device.Id] = frame;
             }
             _rgb.SetColors(device.Id, frame);
+        }
+    }
+
+    /// <summary>
+    /// Applies one device's or zone's own colors to a run of LEDs. LEDs are ordered zone by zone,
+    /// so a zone is a contiguous run. Gradients go from the run's first LED to its last.
+    /// </summary>
+    public static void Paint(RgbColor[] frame, int start, int count, ColorOverride own, double brightness)
+    {
+        if (own.Mode == ColorMode.Follow || count <= 0) return;
+        var a = SafeColor(own.Color);
+        var b = SafeColor(own.Color2);
+        for (var i = 0; i < count; i++)
+        {
+            frame[start + i] = own.Mode switch
+            {
+                ColorMode.Solid => a.Scale(brightness),
+                ColorMode.Gradient => RgbColor.Lerp(a, b, count == 1 ? 0 : (double)i / (count - 1)).Scale(brightness),
+                _ => RgbColor.Black,
+            };
         }
     }
 

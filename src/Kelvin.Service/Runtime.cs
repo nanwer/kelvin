@@ -11,9 +11,13 @@ public sealed class Runtime(
     SettingsStore store,
     bool elevated,
     Kelvin.Hardware.OpenRgbHost? openRgb,
+    ThermalHistory thermal,
     bool demo = false) : IHostedService
 {
+    private static readonly TimeSpan WatchInterval = TimeSpan.FromSeconds(5);
     private readonly CancellationTokenSource _cts = new();
+    private HealthReport? _health;
+    private DateTimeOffset _nextAnalysis = DateTimeOffset.MinValue;
     private readonly List<Task> _loops = [];
     private IReadOnlyList<Conflict> _conflicts = [];
     private Task? _calibration;
@@ -34,9 +38,18 @@ public sealed class Runtime(
 
     private async Task WatchAsync(CancellationToken ct)
     {
-        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(5));
+        using var timer = new PeriodicTimer(WatchInterval);
         do
         {
+            // Thermal history: skip readings taken while fans are measured or forced to full speed.
+            if (!fans.Calibration.Running && !fans.Safety.Override && fans.Sensors.Count > 0)
+                thermal.Record(fans.Sensors, fans.Fans, WatchInterval.TotalMinutes);
+            if (DateTimeOffset.Now >= _nextAnalysis)
+            {
+                _health = thermal.Analyze(fans.Sensors);
+                _nextAnalysis = DateTimeOffset.Now.AddMinutes(1);
+            }
+
             _conflicts = demo ? [] : ConflictDetector.Detect();
             _driverInstalled = fanHw.IsSimulated || FanDriverInstalled();
             openRgb?.EnsureRunning();
@@ -44,6 +57,24 @@ public sealed class Runtime(
             else rgbHw.Refresh();
         } while (await timer.WaitForNextTickAsync(ct));
     }
+
+    public static string Version { get; } =
+        (typeof(Runtime).Assembly.GetCustomAttributes(typeof(System.Reflection.AssemblyInformationalVersionAttribute), false)
+            .FirstOrDefault() as System.Reflection.AssemblyInformationalVersionAttribute)?.InformationalVersion.Split('+')[0] ?? "dev";
+
+    public HardwareReportResult Report() => HardwareReport.Build(new HardwareReportInput(
+        Version,
+        System.Runtime.InteropServices.RuntimeInformation.OSDescription,
+        fanHw.IsSimulated,
+        _driverInstalled,
+        fanHw.Hardware,
+        fans.Fans,
+        store.Current.FanProfiles,
+        fans.Sensors,
+        rgbHw.IsConnected,
+        rgbHw.Status,
+        rgbHw.Devices,
+        _conflicts));
 
     public sealed record CloseResult(string Name, bool Closed, string Message);
 
@@ -125,6 +156,7 @@ public sealed class Runtime(
         _cts.Cancel();
         try { await Task.WhenAll(_loops); } catch (OperationCanceledException) { }
         fans.Dispose(); // hands every fan back to the BIOS
+        thermal.Save();
         rgbHw.Dispose();
         openRgb?.Dispose();
         fanHw.Dispose();
@@ -141,7 +173,7 @@ public sealed class Runtime(
     }
 
     private IReadOnlyList<Recommendation> Recommendations() =>
-        Advisor.Build(fans.Fans, fans.Sensors, store.Current, _conflicts);
+        Advisor.Build(fans.Fans, fans.Sensors, store.Current, _conflicts, _health);
 
     public bool Apply(string id)
     {
@@ -180,6 +212,7 @@ public sealed class Runtime(
         {
             system = new
             {
+                version = Version,
                 simulated = fanHw.IsSimulated,
                 demo,
                 elevated,
@@ -206,6 +239,7 @@ public sealed class Runtime(
             lighting = settings.Lighting,
             preview = lighting.Preview,
             conflicts = _conflicts,
+            health = _health,
             recommendations = Recommendations(),
             presets = Curves.Presets,
         };

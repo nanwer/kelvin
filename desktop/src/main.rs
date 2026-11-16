@@ -16,6 +16,7 @@ use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Manager, RunEvent, WindowEvent};
 use tauri_plugin_autostart::MacosLauncher;
+use tauri_plugin_updater::UpdaterExt;
 
 const SERVICE_ADDR: &str = "127.0.0.1:5577";
 const MINIMIZED_FLAG: &str = "--minimized";
@@ -126,8 +127,47 @@ fn toggle_main(app: &AppHandle) {
     }
 }
 
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct UpdateInfo {
+    version: String,
+    current_version: String,
+    notes: Option<String>,
+}
+
+/// Asks GitHub Releases whether a newer Kelvin exists. Updates are only offered when their
+/// signature matches the public key built into this app (see tauri.conf.json), so a tampered
+/// release is refused even if someone gets into the GitHub repo.
+#[tauri::command]
+async fn check_for_update(app: AppHandle) -> Result<Option<UpdateInfo>, String> {
+    let update = app.updater().map_err(|e| e.to_string())?.check().await.map_err(|e| e.to_string())?;
+    Ok(update.map(|u| UpdateInfo {
+        version: u.version.clone(),
+        current_version: u.current_version.clone(),
+        notes: u.body.clone(),
+    }))
+}
+
+/// Downloads and verifies the update, then runs the installer in passive mode (a progress bar,
+/// no questions). The installer stops Kelvin's service first, so fans are handed back to the
+/// BIOS for the few seconds the upgrade takes, then starts the new version.
+#[tauri::command]
+async fn install_update(app: AppHandle) -> Result<(), String> {
+    let Some(update) = app.updater().map_err(|e| e.to_string())?.check().await.map_err(|e| e.to_string())? else {
+        return Err("Kelvin is already up to date.".into());
+    };
+    update
+        .download_and_install(|_chunk, _total| {}, || {})
+        .await
+        .map_err(|e| format!("The update couldn't be installed: {e}"))?;
+    app.restart();
+}
+
 fn main() {
     let app = tauri::Builder::default()
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_opener::init())
+        .invoke_handler(tauri::generate_handler![check_for_update, install_update])
         // A second launch (e.g. clicking the shortcut again) brings the existing window forward.
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| show_main(app)))
         .plugin(tauri_plugin_autostart::init(

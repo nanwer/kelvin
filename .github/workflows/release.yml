@@ -1,0 +1,110 @@
+# Builds, signs and drafts a release when a version tag is pushed (git tag v0.2.0 && git push --tags).
+# Nothing reaches users until you click "Publish" on the draft: the app's updater only sees
+# published releases. See docs/RELEASING.md.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    env:
+      # Updater signing key (required). Without it, users can't verify updates, so the job stops.
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+      # Code signing through SignPath (optional until SignPath approves the project).
+      SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check the updater key is configured
+        if: env.TAURI_SIGNING_PRIVATE_KEY == ''
+        run: |
+          echo "::error::Add the TAURI_SIGNING_PRIVATE_KEY and TAURI_SIGNING_PRIVATE_KEY_PASSWORD repository secrets. See docs/RELEASING.md."
+          exit 1
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop -> target
+          cache-all-crates: true
+
+      - name: Install Tauri CLI
+        run: cargo install tauri-cli --version "^2" --locked
+
+      - name: Run tests
+        run: dotnet test
+
+      - name: Check the tag matches the app version
+        shell: pwsh
+        run: |
+          $version = (Get-Content desktop/tauri.conf.json -Raw | ConvertFrom-Json).version
+          if ("${{ github.ref_type }}" -eq "tag" -and "${{ github.ref_name }}" -ne "v$version") {
+            Write-Error "Tag ${{ github.ref_name }} doesn't match the app version $version in desktop/tauri.conf.json"; exit 1
+          }
+          "VERSION=$version" >> $env:GITHUB_ENV
+
+      - name: Build installer
+        shell: pwsh
+        run: ./build-installer.ps1 -NoUpdateManifest
+
+      - name: Find installer
+        id: installer
+        shell: pwsh
+        run: |
+          $file = Get-ChildItem desktop/target/release/bundle/nsis/*-setup.exe | Select-Object -First 1
+          "path=$($file.FullName)" >> $env:GITHUB_OUTPUT
+          "name=$($file.Name)" >> $env:GITHUB_OUTPUT
+
+      # ---- Code signing (removes the SmartScreen warning). Skipped until SignPath is set up.
+      - name: Upload unsigned installer for SignPath
+        if: env.SIGNPATH_API_TOKEN != ''
+        id: unsigned
+        uses: actions/upload-artifact@v4
+        with:
+          name: unsigned-installer
+          path: ${{ steps.installer.outputs.path }}
+
+      - name: Code-sign with SignPath
+        if: env.SIGNPATH_API_TOKEN != ''
+        uses: signpath/github-action-submit-signing-request@v1
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: kelvin
+          signing-policy-slug: release-signing
+          artifact-configuration-slug: installer
+          github-artifact-id: ${{ steps.unsigned.outputs.artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: signed
+
+      - name: Use the signed installer
+        if: env.SIGNPATH_API_TOKEN != ''
+        shell: pwsh
+        run: Copy-Item "signed/${{ steps.installer.outputs.name }}" "${{ steps.installer.outputs.path }}" -Force
+
+      # ---- Update signature covers the final (code-signed) bytes, so it comes last.
+      - name: Sign update and write latest.json
+        shell: pwsh
+        run: ./scripts/update-manifest.ps1 -Installer "${{ steps.installer.outputs.path }}" -Notes "See the release notes on GitHub."
+
+      - name: Draft the GitHub release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $dir = Split-Path "${{ steps.installer.outputs.path }}"
+          gh release create "v$env:VERSION" `
+            "${{ steps.installer.outputs.path }}" "${{ steps.installer.outputs.path }}.sig" "$dir/latest.json" `
+            --draft --title "Kelvin $env:VERSION" --generate-notes
