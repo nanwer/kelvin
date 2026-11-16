@@ -15,7 +15,9 @@ var Port = portArg >= 0 && portArg + 1 < args.Length && int.TryParse(args[portAr
 var elevated = OperatingSystem.IsWindows() && new WindowsPrincipal(WindowsIdentity.GetCurrent()).IsInRole(WindowsBuiltInRole.Administrator);
 // --demo: simulated hardware with no conflict scanning or "simulated" notice, for screenshots.
 var demo = args.Contains("--demo");
-var simulate = demo || args.Contains("--simulate") || Environment.GetEnvironmentVariable("KELVIN_SIMULATE") == "1" || !elevated;
+// --laptop: simulate a gaming laptop (fans owned by its controller, fan modes instead).
+var laptopSim = args.Contains("--laptop");
+var simulate = demo || laptopSim || args.Contains("--simulate") || Environment.GetEnvironmentVariable("KELVIN_SIMULATE") == "1" || !elevated;
 
 // Installed, Kelvin runs as a Windows service under LocalSystem, which gives it the rights that fan
 // control needs. Its working directory is then System32, so content comes from the exe's folder.
@@ -43,13 +45,16 @@ var store = new SettingsStore(settingsPath);
 // Demo mode never touches real history: it starts from five weeks of made-up data instead.
 var thermal = new ThermalHistory(demo ? null : ThermalHistory.PathNextTo(settingsPath));
 if (demo) thermal.SeedDemo();
-IFanProvider fanHw = simulate ? new SimulatedFanProvider() : new LhmFanProvider();
+IFanProvider fanHw = simulate ? new SimulatedFanProvider(laptopSim) : new LhmFanProvider();
 IRgbProvider rgbHw = simulate ? new SimulatedRgbProvider() : new OpenRgbProvider();
 var fans = new FanEngine(fanHw, store);
 var lighting = new LightingEngine(rgbHw, store, () => fans.Sensors);
 // With real hardware, Kelvin runs OpenRGB itself so lighting works without the user opening it.
 var openRgbHost = simulate ? null : new OpenRgbHost();
-var runtime = new Runtime(fanHw, rgbHw, fans, lighting, store, elevated, openRgbHost, thermal, demo);
+// Laptop fan modes: the vendor's (HP Omen, ASUS, Lenovo) where available, else Windows power modes.
+IFanModeProvider? fanModes = laptopSim ? new SimulatedFanModes() : simulate ? null : FanModeDetector.Detect();
+var runtime = new Runtime(fanHw, rgbHw, fans, lighting, store, elevated, openRgbHost, thermal, fanModes, demo);
+_ = runtime.Profiles; // set up default profiles before the API takes requests
 
 builder.Services.AddSingleton(runtime);
 builder.Services.AddHostedService(_ => runtime);
@@ -57,7 +62,7 @@ builder.Services.AddHostedService(_ => runtime);
 builder.Services.AddCors(o => o.AddDefaultPolicy(p => p
     .WithOrigins(DesktopOrigins.All)
     .WithHeaders("Content-Type", "X-Kelvin")
-    .WithMethods("GET", "PUT", "POST")));
+    .WithMethods("GET", "PUT", "POST", "DELETE")));
 
 var app = builder.Build();
 app.UseWebSockets();
@@ -190,6 +195,109 @@ api.MapPut("/alerts", (AlertSettings body) =>
 
 api.MapPost("/alerts/test", (Runtime rt) => Results.Ok(rt.Alerts.Test()));
 
+// ---- Profiles
+api.MapPut("/profiles/active", (RecommendationRequest req, Runtime rt) =>
+{
+    try { rt.Profiles.SetManual(req.Id); return Results.Ok(); }
+    catch (KeyNotFoundException ex) { return Results.NotFound(new { error = ex.Message }); }
+});
+
+api.MapPut("/profiles/automation", (ProfileAutomation body) =>
+{
+    var ids = store.Read(s => s.Profiles.Select(p => p.Id).ToHashSet());
+    if (!ids.Contains(body.DefaultProfileId)) return Results.BadRequest(new { error = "Pick a default profile." });
+    if (body.GameProfileId is { } g && !ids.Contains(g)) return Results.BadRequest(new { error = "The game profile doesn't exist." });
+    if (body.NightProfileId is { } n && !ids.Contains(n)) return Results.BadRequest(new { error = "The night profile doesn't exist." });
+    if (!TimeOnly.TryParse(body.NightStart, out _) || !TimeOnly.TryParse(body.NightEnd, out _))
+        return Results.BadRequest(new { error = "Night times must look like 23:00." });
+    body.GameProcesses = (body.GameProcesses ?? [])
+        .Select(p => p.Trim()).Where(p => p.Length is > 0 and <= 100 && p.IndexOfAny(['/', '\\']) < 0)
+        .Select(p => p.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) ? p[..^4] : p)
+        .Distinct(StringComparer.OrdinalIgnoreCase).Take(50).ToList();
+    store.Mutate(s => s.Automation = body);
+    return Results.Ok(body);
+});
+
+api.MapPost("/profiles", (ProfileRequest req) =>
+{
+    var name = (req.Name ?? "").Trim();
+    if (name.Length is 0 or > 40) return Results.BadRequest(new { error = "Give the profile a name of up to 40 characters." });
+    if (store.Read(s => s.Profiles.Count) >= 12) return Results.BadRequest(new { error = "Up to 12 profiles are supported." });
+    var id = new string(name.ToLowerInvariant().Where(char.IsLetterOrDigit).ToArray());
+    if (id.Length == 0) id = "profile";
+    var taken = store.Read(s => s.Profiles.Select(p => p.Id).ToHashSet());
+    for (var i = 2; taken.Contains(id); i++) id = $"{id.TrimEnd("0123456789".ToCharArray())}{i}";
+    var profile = store.Read(s => new Profile
+    {
+        Id = id, Name = name, Fans = ProfileEngine.Copy(s.Fans), Lighting = ProfileEngine.Copy(s.Lighting),
+        FanMode = s.Profiles.FirstOrDefault(p => p.Id == s.ActiveProfileId)?.FanMode,
+    });
+    store.Mutate(s => s.Profiles.Add(profile));
+    return Results.Ok(new { profile.Id, profile.Name });
+});
+
+api.MapPut("/profiles/{id}", (string id, ProfileRequest req, Runtime rt) =>
+{
+    if (!store.Read(s => s.Profiles.Any(p => p.Id == id))) return Results.NotFound(new { error = "That profile doesn't exist." });
+    var name = req.Name?.Trim();
+    if (name is { Length: 0 or > 40 }) return Results.BadRequest(new { error = "Profile names can be up to 40 characters." });
+    if (req.FanMode is { } m && rt.FanModes?.Modes.Any(x => x.Id == m) != true) return Results.BadRequest(new { error = "This PC doesn't have that fan mode." });
+    store.Mutate(s =>
+    {
+        var p = s.Profiles.Single(x => x.Id == id);
+        if (name is not null) p.Name = name;
+        if (req.FanMode is not null) p.FanMode = req.FanMode;
+    });
+    if (req.FanMode is not null && store.Read(s => s.ActiveProfileId) == id) rt.SetFanMode(req.FanMode);
+    return Results.Ok();
+});
+
+api.MapDelete("/profiles/{id}", (string id) =>
+{
+    var (count, automation) = store.Read(s => (s.Profiles.Count, s.Automation));
+    if (count <= 1) return Results.BadRequest(new { error = "Keep at least one profile." });
+    if (automation.DefaultProfileId == id || automation.GameProfileId == id || automation.NightProfileId == id)
+        return Results.BadRequest(new { error = "This profile is used by automatic switching. Pick another one there first." });
+    store.Mutate(s =>
+    {
+        s.Profiles.RemoveAll(p => p.Id == id);
+        if (s.ActiveProfileId == id) s.ActiveProfileId = s.Automation.DefaultProfileId;
+    });
+    return Results.Ok();
+});
+
+// ---- Home Assistant (MQTT)
+api.MapPut("/mqtt", (MqttRequest req) =>
+{
+    var host = (req.Host ?? "").Trim();
+    if (host.Length > 255 || host.Any(char.IsWhiteSpace) || host.Contains('/'))
+        return Results.BadRequest(new { error = "Enter just the broker's address, like 192.168.1.20 or homeassistant.local." });
+    if (req.Port is < 1 or > 65535) return Results.BadRequest(new { error = "The port must be between 1 and 65535." });
+    static bool TopicOk(string? t) => !string.IsNullOrWhiteSpace(t) && t.Length <= 100 && t.IndexOfAny(['#', '+', ' ']) < 0;
+    if (!TopicOk(req.BaseTopic) || !TopicOk(req.DiscoveryPrefix))
+        return Results.BadRequest(new { error = "Topics can't be empty or contain spaces, # or +." });
+    if (req.Enabled && host.Length == 0) return Results.BadRequest(new { error = "Enter your broker's address." });
+    store.Mutate(s =>
+    {
+        var m = s.Mqtt;
+        m.Enabled = req.Enabled; m.Host = host; m.Port = req.Port; m.UseTls = req.UseTls;
+        m.Username = (req.Username ?? "").Trim();
+        m.BaseTopic = req.BaseTopic!.Trim('/'); m.DiscoveryPrefix = req.DiscoveryPrefix!.Trim('/');
+        m.AllowProfileControl = req.AllowProfileControl;
+        // null keeps the saved password; "" clears it.
+        if (req.Password is not null) m.PasswordProtected = HomeAssistantBridge.Protect(req.Password);
+    });
+    return Results.Ok();
+});
+
+// ---- Laptop fan modes (the choice is saved into the active profile)
+api.MapPut("/fan-mode", (RecommendationRequest req, Runtime rt) =>
+{
+    if (rt.FanModes?.Modes.Any(m => m.Id == req.Id) != true) return Results.BadRequest(new { error = "This PC doesn't have that fan mode." });
+    try { rt.SetFanMode(req.Id, saveToProfile: true); return Results.Ok(); }
+    catch (Exception ex) { return Results.Problem(detail: $"The laptop didn't accept that mode: {ex.Message}", statusCode: 502); }
+});
+
 api.MapPost("/recommendations/apply",(RecommendationRequest req, Runtime rt) => rt.Apply(req.Id) ? Results.Ok() : Results.NotFound());
 api.MapPost("/conflicts/close", (RecommendationRequest req, Runtime rt) =>
 {
@@ -221,6 +329,9 @@ app.Logger.LogInformation("Kelvin is running at http://127.0.0.1:{Port} ({Mode})
 app.Run();
 
 record RecommendationRequest(string Id);
+record ProfileRequest(string? Name, string? FanMode);
+record MqttRequest(bool Enabled, string? Host, int Port, bool UseTls, string? Username, string? Password,
+    string? BaseTopic, string? DiscoveryPrefix, bool AllowProfileControl);
 
 static class DesktopOrigins
 {

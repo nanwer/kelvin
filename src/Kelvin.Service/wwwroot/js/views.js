@@ -253,6 +253,7 @@ function fansView(root, { param }) {
     <header class="page-head"><div><h1>Fans</h1><p>Pick a fan, choose who controls it, and shape how fast it spins as things heat up.</p></div>
       <div class="actions"><button class="btn" id="fx-calibrate">Measure fans</button></div></header>
     <div class="stack" id="fx-banners"></div>
+    <section class="panel laptop-modes" id="fx-laptop" hidden></section>
     <div class="fan-layout">
       <nav class="panel fan-list" id="fx-list" aria-label="Fans"></nav>
       <section class="panel" id="fx-editor"></section>
@@ -267,6 +268,34 @@ function fansView(root, { param }) {
   let bannerKey = '';
   let profileKey = '';
   let listKey = '';
+
+  // Laptop fan modes: whole-system modes for PCs whose fans can't be driven one by one.
+  let laptopKey = '';
+  function renderLaptop(state) {
+    const el = root.querySelector('#fx-laptop');
+    const l = state.laptop;
+    el.hidden = !l;
+    if (!l) return;
+    const key = JSON.stringify(l);
+    if (key === laptopKey) return;
+    laptopKey = key;
+    const anyControllable = state.fans.some((f) => f.controllable);
+    const current = l.modes.find((m) => m.id === l.current);
+    el.innerHTML = `
+      <div class="panel-head"><h2>Laptop fan mode</h2><span class="meta">${esc(l.name)}${l.experimental ? ' · <span class="tag warn">Experimental</span>' : ''}</span></div>
+      <div class="panel-body stack" style="gap:12px">
+        <div class="segmented" role="group" aria-label="Laptop fan mode" id="fx-mode-set">
+          ${l.modes.map((m) => `<button type="button" data-mode="${m.id}" aria-pressed="${m.id === l.current}" title="${esc(m.description)}">${esc(m.label)}</button>`).join('')}
+        </div>
+        <p class="muted">${current ? esc(current.description) : 'Pick a mode. It saves into your active profile.'}
+          ${anyControllable ? '' : ' This laptop controls its own fans, so Kelvin sets the mode and the laptop does the rest.'}</p>
+        ${l.experimental ? `<p class="faint">Nobody has confirmed this interface on your model yet. If a mode doesn't seem to change anything, or something looks wrong, please send a hardware report from Settings.</p>` : ''}
+      </div>`;
+  }
+  root.querySelector('#fx-laptop').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-mode]'); if (!b) return;
+    run(() => api('PUT', '/fan-mode', { id: b.dataset.mode }), `Fan mode: ${b.textContent}`);
+  });
 
   root.querySelector('#fx-calibrate').addEventListener('click', () =>
     run(() => api('POST', '/fans/calibrate'), 'Measuring fans. This takes about 30 seconds.'));
@@ -313,7 +342,12 @@ function fansView(root, { param }) {
     const fan = state.fans.find((f) => f.id === selected);
     const el = root.querySelector('#fx-editor');
     if (!fan) { el.innerHTML = '<div class="empty"><strong>No fans found</strong><span>Kelvin couldn\'t find any fan headers it can read.</span></div>'; return; }
-    if (!fan.controllable) { el.innerHTML = `<div class="empty"><strong>${esc(fan.name)} is read only</strong><span>Kelvin can see its speed but this header doesn't accept speed changes.</span></div>`; return; }
+    if (!fan.controllable) {
+      el.innerHTML = state.laptop
+        ? `<div class="empty"><strong>${esc(fan.name)}: ${fmtRpm(fan.rpm)} rpm</strong><span>Your laptop runs this fan itself. Use the laptop fan mode above to make it quieter or stronger.</span></div>`
+        : `<div class="empty"><strong>${esc(fan.name)} is read only</strong><span>Kelvin can see its speed, but this fan doesn't accept speed changes.</span></div>`;
+      return;
+    }
 
     const d = draft;
     const sensors = temperatureSensors(state);
@@ -450,6 +484,8 @@ function fansView(root, { param }) {
       lastState = state;
       const b = banners(state);
       if (b !== bannerKey) { root.querySelector('#fx-banners').innerHTML = b; bannerKey = b; }
+      renderLaptop(state);
+      root.querySelector('#fx-calibrate').hidden = !state.fans.some((f) => f.controllable);
       root.querySelector('#fx-calibrate').disabled = state.calibration.running;
       root.querySelector('#fx-calibrate').textContent = state.calibration.running ? `Measuring… ${Math.round(state.calibration.progress * 100)}%` : 'Measure fans';
       if (first) { select(selected); return; }
@@ -654,6 +690,170 @@ function lightingView(root) {
   };
 }
 
+// ---------------------------------------------------------------- Profiles
+
+const FAN_MODE_LABEL = { quiet: 'Quiet', balanced: 'Balanced', performance: 'Performance', max: 'Max fan' };
+
+function profilesView(root) {
+  root.innerHTML = `<div class="page">
+    <header class="page-head"><div><h1>Profiles</h1>
+      <p>Each profile is a complete setup: fan curves, lighting${''} and, on laptops, the fan mode. Changes you make on the Fans and Lighting pages save into the active profile.</p></div>
+      <div class="actions"><button class="btn" id="pf-new">${icon('plus', 16)} New from current settings</button></div></header>
+    <section class="panel"><div id="pf-list"></div></section>
+    <section class="panel">
+      <div class="panel-head"><h2>Switch automatically</h2>
+        <label class="switch" title="Automatic switching"><input type="checkbox" id="pf-auto" aria-label="Switch profiles automatically"><span></span></label></div>
+      <div class="panel-body stack">
+        <p class="muted" id="pf-status"></p>
+        <div class="field-row">
+          <div class="field"><label for="pf-default">Normally use</label><select id="pf-default"></select></div>
+        </div>
+        <div class="auto-rule">
+          <h3>When a game is running</h3>
+          <div class="field-row">
+            <div class="field"><label for="pf-game">Switch to</label><select id="pf-game"></select></div>
+            <div class="field"><span class="label">How Kelvin spots games</span>
+              <label class="check"><input type="checkbox" id="pf-gpu"> When the graphics card is busy (70%+ for 30 seconds)</label></div>
+          </div>
+          <div class="field"><label for="pf-proc">These apps always count as games</label>
+            <div class="chips" id="pf-procs"></div>
+            <div class="actions"><input type="text" id="pf-proc" placeholder="e.g. eldenring or Cyberpunk2077.exe" maxlength="100" style="flex:1;max-width:340px">
+              <button type="button" class="btn sm" id="pf-proc-add">Add</button></div>
+            <span class="hint">Use the program's file name. You'll find it in Task Manager → Details.</span></div>
+        </div>
+        <div class="auto-rule">
+          <h3><label class="check" style="color:var(--text)"><input type="checkbox" id="pf-night"> At night</label></h3>
+          <div class="field-row">
+            <div class="field"><label for="pf-nightp">Switch to</label><select id="pf-nightp"></select></div>
+            <div class="field"><span class="label">Between</span>
+              <div class="actions"><input type="time" id="pf-start" aria-label="Night starts"> <span class="muted">and</span> <input type="time" id="pf-end" aria-label="Night ends"></div></div>
+          </div>
+        </div>
+        <p class="faint">A game beats the night schedule. If you pick a profile yourself, it stays until a game starts or ends, or the night window opens or closes.</p>
+        <div class="actions"><button class="btn primary" id="pf-save" disabled>Save</button></div>
+      </div>
+    </section>
+  </div>`;
+
+  const $ = (s) => root.querySelector(s);
+  let auto = null, autoBase = null, lastState = null, listKey = '';
+
+  const options = (sel, value, allowNone) => {
+    $(sel).innerHTML = (allowNone ? '<option value="">Don\'t switch</option>' : '')
+      + lastState.profiles.map((p) => `<option value="${esc(p.id)}" ${p.id === value ? 'selected' : ''}>${esc(p.name)}</option>`).join('');
+  };
+
+  function renderAuto() {
+    $('#pf-auto').checked = auto.enabled;
+    options('#pf-default', auto.defaultProfileId, false);
+    options('#pf-game', auto.gameProfileId ?? '', true);
+    options('#pf-nightp', auto.nightProfileId ?? '', true);
+    $('#pf-gpu').checked = auto.detectGamesByGpu;
+    $('#pf-night').checked = auto.nightEnabled;
+    $('#pf-start').value = auto.nightStart;
+    $('#pf-end').value = auto.nightEnd;
+    $('#pf-procs').innerHTML = auto.gameProcesses.map((p, i) =>
+      `<span class="chip">${esc(p)}<button type="button" data-rm="${i}" aria-label="Remove ${esc(p)}">${icon('close', 14)}</button></span>`).join('')
+      || '<span class="faint">None yet.</span>';
+    changed();
+  }
+  const changed = () => { $('#pf-save').disabled = same(auto, autoBase); };
+
+  root.addEventListener('change', (e) => {
+    if (!auto) return;
+    const t = e.target;
+    if (t.id === 'pf-auto') auto.enabled = t.checked;
+    else if (t.id === 'pf-default') auto.defaultProfileId = t.value;
+    else if (t.id === 'pf-game') auto.gameProfileId = t.value || null;
+    else if (t.id === 'pf-nightp') auto.nightProfileId = t.value || null;
+    else if (t.id === 'pf-gpu') auto.detectGamesByGpu = t.checked;
+    else if (t.id === 'pf-night') auto.nightEnabled = t.checked;
+    else if (t.id === 'pf-start') auto.nightStart = t.value;
+    else if (t.id === 'pf-end') auto.nightEnd = t.value;
+    else return;
+    changed();
+  });
+  const addProc = () => {
+    const v = $('#pf-proc').value.trim().replace(/\.exe$/i, '');
+    if (!v) return;
+    if (!auto.gameProcesses.some((p) => p.toLowerCase() === v.toLowerCase())) auto.gameProcesses.push(v);
+    $('#pf-proc').value = '';
+    renderAuto();
+  };
+  $('#pf-proc-add').addEventListener('click', addProc);
+  $('#pf-proc').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); addProc(); } });
+  $('#pf-procs').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-rm]'); if (!b) return;
+    auto.gameProcesses.splice(Number(b.dataset.rm), 1); renderAuto();
+  });
+  $('#pf-save').addEventListener('click', () => run(async () => {
+    const saved = await api('PUT', '/profiles/automation', auto);
+    auto = clone(saved); autoBase = clone(saved); renderAuto();
+  }, 'Automatic switching saved'));
+
+  $('#pf-new').addEventListener('click', () => run(async () => {
+    const name = prompt('Name for the new profile (it starts as a copy of your current settings):');
+    if (!name) return;
+    await api('POST', '/profiles', { name });
+  }));
+
+  $('#pf-list').addEventListener('click', (e) => {
+    const row = e.target.closest('[data-profile]'); if (!row) return;
+    const id = row.dataset.profile;
+    const act = e.target.closest('[data-act]')?.dataset.act;
+    if (act === 'use') run(() => api('PUT', '/profiles/active', { id }));
+    if (act === 'rename') {
+      const name = prompt('New name:', lastState.profiles.find((p) => p.id === id)?.name ?? '');
+      if (name) run(() => api('PUT', `/profiles/${encodeURIComponent(id)}`, { name }), 'Renamed');
+    }
+    if (act === 'delete' && confirm('Delete this profile? Its fan and lighting settings are lost.')) {
+      run(() => api('DELETE', `/profiles/${encodeURIComponent(id)}`), 'Profile deleted');
+    }
+  });
+  $('#pf-list').addEventListener('change', (e) => {
+    const sel = e.target.closest('select[data-fanmode]'); if (!sel) return;
+    run(() => api('PUT', `/profiles/${encodeURIComponent(sel.dataset.fanmode)}`, { fanMode: sel.value }), 'Fan mode saved');
+  });
+
+  return {
+    update(state) {
+      lastState = state;
+      const st = state.profileStatus ?? {};
+      $('#pf-status').innerHTML = `Now using <strong>${esc(state.profiles.find((p) => p.id === state.activeProfileId)?.name ?? '–')}</strong>: ${esc(st.reason ?? '')}`;
+
+      const key = JSON.stringify([state.profiles, state.activeProfileId, state.laptop?.modes, state.automation]);
+      if (key !== listKey) {
+        listKey = key;
+        const usedBy = (id) => [
+          state.automation.defaultProfileId === id && 'normally',
+          state.automation.gameProfileId === id && 'for games',
+          state.automation.nightEnabled && state.automation.nightProfileId === id && 'at night',
+        ].filter(Boolean);
+        $('#pf-list').innerHTML = state.profiles.map((p) => {
+          const active = p.id === state.activeProfileId;
+          const roles = usedBy(p.id);
+          return `<div class="profile-row ${active ? 'active' : ''}" data-profile="${esc(p.id)}">
+            <div><strong>${esc(p.name)}</strong> ${active ? '<span class="tag accent">Active</span>' : ''}
+              <div class="faint">${roles.length ? `Used ${roles.join(', ')}` : 'Only when you pick it'}</div></div>
+            ${state.laptop ? `<label class="fanmode"><span class="faint">Laptop fan mode</span>
+              <select data-fanmode="${esc(p.id)}" aria-label="Laptop fan mode for ${esc(p.name)}">
+                ${state.laptop.modes.map((m) => `<option value="${m.id}" ${m.id === p.fanMode ? 'selected' : ''}>${esc(m.label)}</option>`).join('')}
+              </select></label>` : '<span></span>'}
+            <div class="actions">
+              ${active ? '' : '<button class="btn sm primary" data-act="use">Use now</button>'}
+              <button class="btn sm ghost" data-act="rename">Rename</button>
+              <button class="btn sm ghost" data-act="delete" ${roles.length || state.profiles.length <= 1 ? 'disabled title="Used by automatic switching"' : ''}>Delete</button>
+            </div></div>`;
+        }).join('');
+      }
+
+      if (!auto || (same(auto, autoBase) && !same(autoBase, state.automation))) {
+        auto = clone(state.automation); autoBase = clone(state.automation); renderAuto();
+      }
+    },
+  };
+}
+
 // ---------------------------------------------------------------- Health
 
 const BAND_LABEL = { idle: 'Idle', light: 'Light load', medium: 'Medium load', heavy: 'Heavy load' };
@@ -845,6 +1045,31 @@ function settingsView(root) {
         <div><strong>Closing the window</strong><span class="faint">Kelvin stays in the tray. Your fan curves and lighting are run by Kelvin's background service, so they keep working even after you quit the app. If that service ever stops, fans go back to your BIOS settings.</span></div>
       </div>
     </section>
+    <section class="panel" id="ha">
+      <div class="panel-head"><h2>Home Assistant</h2><span class="meta" id="ha-status"></span></div>
+      <div class="panel-body stack">
+        <p class="muted" style="max-width:72ch">Share temperatures, fan speeds and your profile with Home Assistant (or any MQTT tool). Kelvin appears as a device on its own through MQTT discovery. Home Assistant can switch profiles, but it can never set fan speeds directly.</p>
+        <label class="check"><input type="checkbox" id="ha-enabled"> Connect to an MQTT broker</label>
+        <div class="field-row">
+          <div class="field"><label for="ha-host">Broker address</label><input type="text" id="ha-host" placeholder="homeassistant.local or 192.168.1.20" maxlength="255"></div>
+          <div class="field"><label for="ha-port">Port</label><input type="number" id="ha-port" min="1" max="65535" style="width:110px"></div>
+        </div>
+        <div class="field-row">
+          <div class="field"><label for="ha-user">Username</label><input type="text" id="ha-user" autocomplete="off" maxlength="100"></div>
+          <div class="field"><label for="ha-pass">Password</label><input type="password" id="ha-pass" autocomplete="new-password" maxlength="200">
+            <span class="hint" id="ha-pass-hint"></span></div>
+        </div>
+        <label class="check"><input type="checkbox" id="ha-tls"> Use TLS (usually port 8883)</label>
+        <label class="check"><input type="checkbox" id="ha-control"> Let Home Assistant switch profiles</label>
+        <details><summary class="faint">Advanced</summary>
+          <div class="field-row" style="margin-top:10px">
+            <div class="field"><label for="ha-base">Topic prefix</label><input type="text" id="ha-base" maxlength="100"></div>
+            <div class="field"><label for="ha-disc">Discovery prefix</label><input type="text" id="ha-disc" maxlength="100"></div>
+          </div>
+        </details>
+        <div class="actions"><button class="btn primary" id="ha-save">Save and connect</button><span class="faint" id="ha-topics"></span></div>
+      </div>
+    </section>
     <section class="panel" id="st-updates" hidden>
       <div class="panel-head"><h2>Updates</h2><span class="meta" id="st-version"></span></div>
       <div class="device">
@@ -871,6 +1096,39 @@ function settingsView(root) {
       </div>
     </section>
   </div>`;
+
+  // ---- Home Assistant (MQTT)
+  let haLoaded = false;
+  const $h = (s) => root.querySelector(s);
+  $h('#ha-save').addEventListener('click', () => run(async () => {
+    const pass = $h('#ha-pass').value;
+    await api('PUT', '/mqtt', {
+      enabled: $h('#ha-enabled').checked,
+      host: $h('#ha-host').value, port: Number($h('#ha-port').value),
+      useTls: $h('#ha-tls').checked,
+      username: $h('#ha-user').value,
+      password: pass === '' ? null : pass, // empty box keeps the saved password
+      baseTopic: $h('#ha-base').value, discoveryPrefix: $h('#ha-disc').value,
+      allowProfileControl: $h('#ha-control').checked,
+    });
+    $h('#ha-pass').value = '';
+  }, 'Home Assistant settings saved'));
+
+  function updateHa(state) {
+    const m = state.mqtt;
+    if (!m) return;
+    if (!haLoaded) {
+      $h('#ha-enabled').checked = m.enabled; $h('#ha-host').value = m.host; $h('#ha-port').value = m.port;
+      $h('#ha-user').value = m.username; $h('#ha-tls').checked = m.useTls; $h('#ha-control').checked = m.allowProfileControl;
+      $h('#ha-base').value = m.baseTopic; $h('#ha-disc').value = m.discoveryPrefix;
+      haLoaded = true;
+    }
+    $h('#ha-pass-hint').textContent = m.hasPassword ? 'A password is saved. Leave this empty to keep it.' : '';
+    $h('#ha-status').innerHTML = m.connected
+      ? `<span class="tag ok">Connected</span>`
+      : m.enabled ? `<span class="tag warn">${esc(m.status)}</span>` : '<span class="faint">Off</span>';
+    $h('#ha-topics').textContent = m.node ? `Publishes to ${m.baseTopic}/${m.node}/…` : '';
+  }
 
   // ---- Temperature alerts editor
   let alerts = null;       // draft
@@ -1001,6 +1259,7 @@ function settingsView(root) {
         loaded = true;
       }
       lastSettingsState = state;
+      updateHa(state);
       if (!alerts && state.alertSettings) {
         alerts = clone(state.alertSettings); alertsBase = clone(state.alertSettings);
         $a('#al-enabled').checked = alerts.enabled;
@@ -1035,6 +1294,7 @@ export const views = {
   overview: (root) => { const v = overview(root); bindRowLinks(root.firstElementChild); return v; },
   fans: fansView,
   lighting: lightingView,
+  profiles: profilesView,
   health: healthView,
   advice: adviceView,
   settings: settingsView,

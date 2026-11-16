@@ -6,6 +6,7 @@ const ROUTES = [
   { id: 'overview', label: 'Overview' },
   { id: 'fans', label: 'Fans' },
   { id: 'lighting', label: 'Lighting' },
+  { id: 'profiles', label: 'Profiles' },
   { id: 'health', label: 'Health' },
   { id: 'advice', label: 'Advice' },
   { id: 'settings', label: 'Settings' },
@@ -217,6 +218,57 @@ function renderStatus() {
   railStatus.innerHTML = rows.join('');
 }
 
+// ---- Profile switcher (sidebar) and tray menu
+const SOURCE_LABEL = { manual: 'Chosen by you', game: 'Auto', night: 'Auto', default: 'Auto' };
+let switchKey = '';
+let trayKey = '';
+
+function renderProfileSwitch(s) {
+  const el = document.getElementById('profile-switch');
+  const status = s.profileStatus ?? {};
+  const key = JSON.stringify([s.profiles, s.activeProfileId, status.source, status.reason]);
+  if (key === switchKey) return;
+  switchKey = key;
+  const why = status.source === 'manual' ? 'Chosen by you' : `${SOURCE_LABEL[status.source] ?? 'Auto'} · ${status.reason ?? ''}`;
+  el.innerHTML = `
+    <label for="profile-select" class="profile-label">Profile</label>
+    <select id="profile-select" aria-describedby="profile-why">
+      ${(s.profiles ?? []).map((p) => `<option value="${p.id}" ${p.id === s.activeProfileId ? 'selected' : ''}>${p.name.replace(/[<>&"]/g, '')}</option>`).join('')}
+    </select>
+    <span class="profile-why" id="profile-why" title="${why.replace(/"/g, '&quot;')}">${why.replace(/[<>&]/g, '')}</span>`;
+}
+
+document.getElementById('profile-switch').addEventListener('change', async (e) => {
+  if (e.target.id !== 'profile-select') return;
+  try { await api('PUT', '/profiles/active', { id: e.target.value }); }
+  catch (err) { toast(err.message, true); }
+});
+
+// The tray menu lists profiles too. The desktop shell draws it; this keeps it in sync.
+async function syncTray(s) {
+  if (!tauriInvoke) return;
+  const key = JSON.stringify([s.profiles, s.activeProfileId, s.automation?.enabled]);
+  if (key === trayKey) return;
+  trayKey = key;
+  try {
+    await tauriInvoke('update_tray', {
+      profiles: (s.profiles ?? []).map((p) => ({ id: p.id, name: p.name })),
+      active: s.activeProfileId ?? '',
+      automatic: Boolean(s.automation?.enabled),
+    });
+  } catch { trayKey = ''; } // retry on the next update
+}
+
+if (window.__TAURI__?.event) {
+  window.__TAURI__.event.listen('tray-profile', (e) =>
+    api('PUT', '/profiles/active', { id: e.payload }).catch((err) => toast(err.message, true)));
+  window.__TAURI__.event.listen('tray-automatic', () => {
+    if (!state?.automation) return;
+    api('PUT', '/profiles/automation', { ...state.automation, enabled: !state.automation.enabled })
+      .catch((err) => toast(err.message, true));
+  });
+}
+
 let lastNavKey = '';
 function onState(next) {
   const first = !state;
@@ -224,6 +276,8 @@ function onState(next) {
   connected = true;
   handleAlerts(state);
   updateSafetyNotice(state);
+  renderProfileSwitch(state);
+  syncTray(state);
   if (first) { route(); }
   else current?.view.update(state);
   const navKey = `${parseHash().id}|${state.recommendations.length}`;

@@ -12,8 +12,51 @@ public sealed class Runtime(
     bool elevated,
     Kelvin.Hardware.OpenRgbHost? openRgb,
     ThermalHistory thermal,
+    IFanModeProvider? fanModes,
     bool demo = false) : IHostedService
 {
+    private HashSet<string> _processes = new(StringComparer.OrdinalIgnoreCase);
+    private ProfileEngine? _profiles;
+    private HomeAssistantBridge? _ha;
+
+    /// <summary>What Home Assistant sees.</summary>
+    private HaState HaSnapshot()
+    {
+        var s = fans.Sensors;
+        double? Temp(SensorRole r) => s.FirstOrDefault(x => x.Primary && x.Role == r && x.Kind == SensorKind.Temperature)?.Value;
+        double? Load(SensorRole r) => s.FirstOrDefault(x => x.Role == r && x.Kind == SensorKind.Load)?.Value;
+        var settings = store.Current;
+        return new HaState(
+            Temp(SensorRole.Cpu), Temp(SensorRole.Gpu), Temp(SensorRole.Board), Load(SensorRole.Cpu), Load(SensorRole.Gpu),
+            fans.Fans.Where(f => f.Rpm is not null).Select(f => (f.Name, f.Rpm)).ToList(),
+            settings.Profiles.Select(p => (p.Id, p.Name)).ToList(),
+            settings.ActiveProfileId,
+            settings.Automation.Enabled,
+            fans.Safety.Override,
+            Alerts.Firing.Count > 0,
+            fanModes is null ? null : SafeCurrent());
+    }
+
+    public IFanModeProvider? FanModes => fanModes;
+
+    /// <summary>Profiles and automatic switching. Created on first use (it may add default profiles).</summary>
+    public ProfileEngine Profiles => _profiles ??= new ProfileEngine(store, () => _processes)
+    {
+        ApplyFanMode = id => SetFanMode(id),
+        Applied = () => lighting.Invalidate(),
+    };
+
+    /// <summary>Switches the laptop fan mode; optionally records it in the active profile.</summary>
+    public void SetFanMode(string id, bool saveToProfile = false)
+    {
+        if (fanModes is null || fanModes.Modes.All(m => m.Id != id)) return;
+        fanModes.Set(id);
+        store.Mutate(s =>
+        {
+            s.FanMode = id;
+            if (saveToProfile && s.Profiles.FirstOrDefault(p => p.Id == s.ActiveProfileId) is { } p) p.FanMode = id;
+        });
+    }
     private static readonly TimeSpan WatchInterval = TimeSpan.FromSeconds(5);
     private readonly CancellationTokenSource _cts = new();
     private HealthReport? _health;
@@ -32,11 +75,32 @@ public sealed class Runtime(
     {
         fanHw.Open();
         rgbHw.Open();
+        // Re-apply the active profile's laptop fan mode: some vendors reset it on reboot.
+        var mode = store.Read(s => s.Profiles.FirstOrDefault(p => p.Id == s.ActiveProfileId)?.FanMode ?? s.FanMode);
+        if (mode is not null) { try { SetFanMode(mode); } catch { /* reported in the UI via Current */ } }
         _loops.Add(fans.RunAsync(_cts.Token));
         _loops.Add(lighting.RunAsync(_cts.Token));
         _loops.Add(WatchAsync(_cts.Token));
         _loops.Add(AlertsAsync(_cts.Token));
+
+        _ha = new HomeAssistantBridge(
+            () => store.Read(s => s.Mqtt), HaSnapshot,
+            id => Profiles.SetManual(id),
+            on => store.Mutate(s => s.Automation.Enabled = on),
+            Environment.MachineName, Version);
+        _loops.Add(_ha.RunAsync(_cts.Token));
         return Task.CompletedTask;
+    }
+
+    public object MqttView()
+    {
+        var m = store.Current.Mqtt;
+        return new
+        {
+            m.Enabled, m.Host, m.Port, m.UseTls, m.Username, hasPassword = m.PasswordProtected.Length > 0,
+            m.BaseTopic, m.DiscoveryPrefix, m.AllowProfileControl,
+            status = _ha?.Status ?? "Off", connected = _ha?.Connected ?? false, node = _ha?.Node,
+        };
     }
 
     /// <summary>Checks alert rules every second, so "above 85°C for 10 s" means 10 s.</summary>
@@ -64,6 +128,15 @@ public sealed class Runtime(
                 _nextAnalysis = DateTimeOffset.Now.AddMinutes(1);
             }
 
+            try
+            {
+                _processes = System.Diagnostics.Process.GetProcesses()
+                    .Select(p => { using (p) return p.ProcessName; })
+                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            }
+            catch { /* keep the last list */ }
+            try { Profiles.Evaluate(fans.Sensors); } catch { /* never let profiles stop the watch loop */ }
+
             _conflicts = demo ? [] : ConflictDetector.Detect();
             _driverInstalled = fanHw.IsSimulated || FanDriverInstalled();
             openRgb?.EnsureRunning();
@@ -88,7 +161,8 @@ public sealed class Runtime(
         rgbHw.IsConnected,
         rgbHw.Status,
         rgbHw.Devices,
-        _conflicts));
+        _conflicts,
+        fanModes is null ? null : $"{fanModes.Name}{(fanModes.Experimental ? " (experimental)" : "")}: {string.Join(", ", fanModes.Modes.Select(m => m.Label))}"));
 
     public sealed record CloseResult(string Name, bool Closed, string Message);
 
@@ -214,6 +288,12 @@ public sealed class Runtime(
         return recs.Count;
     }
 
+    private string? SafeCurrent()
+    {
+        try { return fanModes?.Current ?? store.Current.FanMode; }
+        catch { return store.Current.FanMode; }
+    }
+
     public object Snapshot()
     {
         var settings = store.Current;
@@ -254,6 +334,18 @@ public sealed class Runtime(
             preview = lighting.Preview,
             conflicts = _conflicts,
             health = _health,
+            profiles = settings.Profiles.Select(p => new { p.Id, p.Name, p.FanMode }),
+            activeProfileId = settings.ActiveProfileId,
+            automation = settings.Automation,
+            profileStatus = Profiles.Status,
+            laptop = fanModes is null ? null : new
+            {
+                name = fanModes.Name,
+                experimental = fanModes.Experimental,
+                modes = fanModes.Modes,
+                current = SafeCurrent(),
+            },
+            mqtt = MqttView(),
             alertSettings = settings.Alerts,
             alerts = new { recent = Alerts.Recent.TakeLast(20).Reverse(), firing = Alerts.Firing },
             recommendations = Recommendations(),

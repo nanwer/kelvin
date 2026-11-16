@@ -20,12 +20,27 @@ public sealed class SimulatedFanProvider : IFanProvider
         public double Rpm;
     }
 
-    private readonly SimFan[] _fans =
-    [
-        new("sim/fan/cpu", "CPU Fan", 1600, 15, true, false),
-        new("sim/fan/chassis", "Chassis Fan", 1200, 20, true, false),
-        new("sim/fan/aio", "AIO Pump", 0, 0, false, true),
-    ];
+    private readonly SimFan[] _fans;
+    private readonly bool _laptop;
+    private readonly string _cpu, _gpu, _board;
+
+    /// <param name="laptop">
+    /// Simulate a gaming laptop (modelled on an HP Omen 17: i7-9750H, RTX 2080) whose fans are run by
+    /// its own controller: Kelvin can read them but not set them, so it offers fan modes instead.
+    /// </param>
+    public SimulatedFanProvider(bool laptop = false)
+    {
+        _laptop = laptop;
+        (_cpu, _gpu, _board) = laptop
+            ? ("Intel Core i7-9750H", "NVIDIA GeForce RTX 2080", "HP 8575")
+            : ("AMD Ryzen 7 5800X", "AMD Radeon RX 9070 XT", "ROG STRIX B550-I GAMING");
+        _fans = laptop
+            ? [new("sim/fan/cpu", "CPU Fan", 5200, 0, true, false), new("sim/fan/gpu", "GPU Fan", 5000, 0, true, false)]
+            : [new("sim/fan/cpu", "CPU Fan", 1600, 15, true, false), new("sim/fan/chassis", "Chassis Fan", 1200, 20, true, false), new("sim/fan/aio", "AIO Pump", 0, 0, false, true)];
+        Hardware = laptop
+            ? [new("Motherboard", "HP 8575"), new("EmbeddedController", "Embedded Controller", "HP 8575"), new("Cpu", _cpu), new("GpuNvidia", _gpu)]
+            : [new("Motherboard", _board), new("SuperIO", "Nuvoton NCT6798D (simulated)", _board), new("Cpu", _cpu), new("GpuAmd", _gpu)];
+    }
 
     private readonly Random _rng = new(5800);
     private DateTime _last = DateTime.UtcNow;
@@ -35,13 +50,7 @@ public sealed class SimulatedFanProvider : IFanProvider
 
     public string Name => "Simulated";
     public bool IsSimulated => true;
-    public IReadOnlyList<HardwareInfo> Hardware { get; } =
-    [
-        new("Motherboard", "ROG STRIX B550-I GAMING"),
-        new("SuperIO", "Nuvoton NCT6798D (simulated)", "ROG STRIX B550-I GAMING"),
-        new("Cpu", "AMD Ryzen 7 5800X"),
-        new("GpuAmd", "AMD Radeon RX 9070 XT"),
-    ];
+    public IReadOnlyList<HardwareInfo> Hardware { get; }
     public IReadOnlyList<FanReading> Fans { get; private set; } = [];
     public IReadOnlyList<SensorReading> Sensors { get; private set; } = [];
 
@@ -78,25 +87,27 @@ public sealed class SimulatedFanProvider : IFanProvider
         _gpuTemp += (gpuEq - _gpuTemp) * Math.Min(1, dt / 9);
         _boardTemp += (boardEq - _boardTemp) * Math.Min(1, dt / 20);
 
-        Fans = _fans.Select(f => new FanReading(f.Id, f.Name, f.Connected ? Math.Round(f.Rpm) : 0, Math.Round(f.Duty, 1), true, f.IsPump)).ToList();
+        Fans = _fans.Select(f => new FanReading(f.Id, f.Name, f.Connected ? Math.Round(f.Rpm) : 0, Math.Round(f.Duty, 1), !_laptop, f.IsPump)).ToList();
         Sensors =
         [
-            new("sim/cpu/tctl", "CPU (Tctl/Tdie)", "AMD Ryzen 7 5800X", SensorRole.Cpu, SensorKind.Temperature, Jitter(_cpuTemp, 0.6), "°C", Primary: true),
-            new("sim/cpu/load", "CPU total", "AMD Ryzen 7 5800X", SensorRole.Cpu, SensorKind.Load, Math.Round(_cpuLoad * 100, 1), "%"),
-            new("sim/gpu/core", "GPU core", "AMD Radeon RX 9070 XT", SensorRole.Gpu, SensorKind.Temperature, Jitter(_gpuTemp, 0.3), "°C", Primary: true),
-            new("sim/gpu/hotspot", "GPU hotspot", "AMD Radeon RX 9070 XT", SensorRole.Gpu, SensorKind.Temperature, Jitter(_gpuTemp + 12 * _gpuLoad + 3, 0.4), "°C"),
-            new("sim/gpu/load", "GPU core", "AMD Radeon RX 9070 XT", SensorRole.Gpu, SensorKind.Load, Math.Round(_gpuLoad * 100, 1), "%"),
-            new("sim/board/system", "Motherboard", "ROG STRIX B550-I GAMING", SensorRole.Board, SensorKind.Temperature, Jitter(_boardTemp, 0.2), "°C", Primary: true),
-            new("sim/board/chipset", "Chipset", "ROG STRIX B550-I GAMING", SensorRole.Board, SensorKind.Temperature, Jitter(_boardTemp + 14, 0.2), "°C"),
+            new("sim/cpu/tctl", _laptop ? "CPU Package" : "CPU (Tctl/Tdie)", _cpu, SensorRole.Cpu, SensorKind.Temperature, Jitter(_cpuTemp + (_laptop ? 14 : 0), 0.6), "°C", Primary: true),
+            new("sim/cpu/load", "CPU total", _cpu, SensorRole.Cpu, SensorKind.Load, Math.Round(_cpuLoad * 100, 1), "%"),
+            new("sim/gpu/core", "GPU core", _gpu, SensorRole.Gpu, SensorKind.Temperature, Jitter(_gpuTemp, 0.3), "°C", Primary: true),
+            new("sim/gpu/hotspot", "GPU hotspot", _gpu, SensorRole.Gpu, SensorKind.Temperature, Jitter(_gpuTemp + 12 * _gpuLoad + 3, 0.4), "°C"),
+            new("sim/gpu/load", "GPU core", _gpu, SensorRole.Gpu, SensorKind.Load, Math.Round(_gpuLoad * 100, 1), "%"),
+            new("sim/board/system", "Motherboard", _board, SensorRole.Board, SensorKind.Temperature, Jitter(_boardTemp, 0.2), "°C", Primary: true),
+            new("sim/board/chipset", "Chipset", _board, SensorRole.Board, SensorKind.Temperature, Jitter(_boardTemp + 14, 0.2), "°C"),
         ];
     }
 
-    private static double BiosDuty(SimFan f) => f.IsPump ? 100 : 60;
+    // A laptop's own controller ramps with temperature; a desktop BIOS here just holds 60%.
+    private double BiosDuty(SimFan f) => f.IsPump ? 100 : _laptop ? Math.Clamp((_cpuTemp - 30) * 2.2, 25, 100) : 60;
 
     private double Jitter(double v, double amount) => Math.Round(v + (_rng.NextDouble() - 0.5) * amount, 1);
 
     public void SetFanPercent(string fanId, double percent)
     {
+        if (_laptop) return; // the laptop's controller owns its fans
         var f = _fans.FirstOrDefault(x => x.Id == fanId) ?? throw new KeyNotFoundException(fanId);
         f.Software = Math.Clamp(percent, 0, 100);
     }

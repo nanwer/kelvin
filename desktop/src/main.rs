@@ -12,7 +12,8 @@ use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
+use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem};
+use tauri::Emitter;
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Manager, RunEvent, WindowEvent};
 use tauri_plugin_autostart::MacosLauncher;
@@ -163,6 +164,40 @@ async fn install_update(app: AppHandle) -> Result<(), String> {
     app.restart();
 }
 
+#[derive(serde::Deserialize)]
+struct TrayProfile {
+    id: String,
+    name: String,
+}
+
+/// Tray menu: Open, the profiles (active one ticked), "Switch automatically", Quit.
+fn tray_menu(app: &AppHandle, profiles: &[TrayProfile], active: &str, automatic: bool) -> tauri::Result<Menu<tauri::Wry>> {
+    let menu = Menu::new(app)?;
+    menu.append(&MenuItem::with_id(app, "open", "Open Kelvin", true, None::<&str>)?)?;
+    if !profiles.is_empty() {
+        menu.append(&PredefinedMenuItem::separator(app)?)?;
+        for p in profiles {
+            menu.append(&CheckMenuItem::with_id(app, format!("profile:{}", p.id), &p.name, true, p.id == active, None::<&str>)?)?;
+        }
+        menu.append(&CheckMenuItem::with_id(app, "automatic", "Switch automatically", true, automatic, None::<&str>)?)?;
+    }
+    menu.append(&PredefinedMenuItem::separator(app)?)?;
+    menu.append(&MenuItem::with_id(app, "quit", "Quit Kelvin", true, None::<&str>)?)?;
+    Ok(menu)
+}
+
+/// Called by the UI whenever profiles or the active one change.
+#[tauri::command]
+fn update_tray(app: AppHandle, profiles: Vec<TrayProfile>, active: String, automatic: bool) -> Result<(), String> {
+    let menu = tray_menu(&app, &profiles, &active, automatic).map_err(|e| e.to_string())?;
+    if let Some(tray) = app.tray_by_id("main") {
+        tray.set_menu(Some(menu)).map_err(|e| e.to_string())?;
+        let name = profiles.iter().find(|p| p.id == active).map(|p| p.name.as_str()).unwrap_or("");
+        let _ = tray.set_tooltip(Some(if name.is_empty() { "Kelvin".to_string() } else { format!("Kelvin · {name}") }));
+    }
+    Ok(())
+}
+
 fn main() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -170,7 +205,7 @@ fn main() {
         // Windows notifications for temperature alerts. The service decides when to alert (it runs
         // without a desktop); this app, running in the tray, shows them.
         .plugin(tauri_plugin_notification::init())
-        .invoke_handler(tauri::generate_handler![check_for_update, install_update])
+        .invoke_handler(tauri::generate_handler![check_for_update, install_update, update_tray])
         // A second launch (e.g. clicking the shortcut again) brings the existing window forward.
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| show_main(app)))
         .plugin(tauri_plugin_autostart::init(
@@ -187,19 +222,26 @@ fn main() {
                 }
             }
 
-            let open = MenuItem::with_id(app, "open", "Open Kelvin", true, None::<&str>)?;
-            let quit = MenuItem::with_id(app, "quit", "Quit Kelvin", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&open, &PredefinedMenuItem::separator(app)?, &quit])?;
+            let menu = tray_menu(app.handle(), &[], "", false)?;
 
             TrayIconBuilder::with_id("main")
                 .icon(app.default_window_icon().cloned().expect("bundle icon"))
                 .tooltip("Kelvin")
                 .menu(&menu)
                 .show_menu_on_left_click(false)
-                .on_menu_event(|app, event| match event.id().as_ref() {
-                    "open" => show_main(app),
-                    "quit" => app.exit(0),
-                    _ => {}
+                .on_menu_event(|app, event| {
+                    let id = event.id().as_ref();
+                    match id {
+                        "open" => show_main(app),
+                        "quit" => app.exit(0),
+                        // The UI owns profiles (it talks to the service), so tray picks go to it.
+                        "automatic" => { let _ = app.emit("tray-automatic", ()); }
+                        _ => {
+                            if let Some(profile) = id.strip_prefix("profile:") {
+                                let _ = app.emit("tray-profile", profile.to_string());
+                            }
+                        }
+                    }
                 })
                 .on_tray_icon_event(|tray, event| {
                     if let TrayIconEvent::Click {
