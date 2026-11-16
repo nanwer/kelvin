@@ -37,5 +37,8 @@ $manifest = [ordered]@{
   platforms = [ordered]@{ 'windows-x86_64' = $entry; 'windows-x86_64-nsis' = $entry }
 }
 $out = Join-Path (Split-Path $Installer) 'latest.json'
-$manifest | ConvertTo-Json -Depth 5 | Set-Content -Path $out -Encoding utf8
+# UTF-8 *without* a byte-order mark: Windows PowerShell's "utf8" adds one, and the updater's JSON
+# parser rejects it, which would silently stop every installed copy from updating.
+[IO.File]::WriteAllText($out, ($manifest | ConvertTo-Json -Depth 5), (New-Object Text.UTF8Encoding $false))
+if ([IO.File]::ReadAllBytes($out)[0] -ne [byte][char]'{') { throw 'latest.json must start with "{" (no BOM).' }
 Write-Host "==> Update manifest: $out (version $version)" -ForegroundColor Green
