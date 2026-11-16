@@ -167,6 +167,9 @@ fn main() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_opener::init())
+        // Windows notifications for temperature alerts. The service decides when to alert (it runs
+        // without a desktop); this app, running in the tray, shows them.
+        .plugin(tauri_plugin_notification::init())
         .invoke_handler(tauri::generate_handler![check_for_update, install_update])
         // A second launch (e.g. clicking the shortcut again) brings the existing window forward.
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| show_main(app)))

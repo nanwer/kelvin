@@ -31,6 +31,9 @@ one app that controls fans and lighting together, and tells you when something e
   **Temperature**, which shifts your whole PC from blue to red as it heats up. Or give any device,
   or any zone inside it (say, just the mouse's scroll wheel), its own solid color or gradient.
   Turn a device off to leave it to another app.
+- **Temperature alerts.** Set your own limits ("CPU above 85°C for 10 seconds") and get a Windows
+  notification when one is crossed, even while Kelvin sits in the tray. Short spikes are ignored
+  and each episode notifies once, so it never nags.
 - **Conflict detection.** Spots Razer Synapse, SignalRGB, Armoury Crate, iCUE, G HUB, Gigabyte Control
   Center and FanControl, and can close the lighting apps for you.
 - **Runs in the background.** Close the window and Kelvin stays in the tray. Your fan curves keep
@@ -64,7 +67,8 @@ still running. From 0.2.0 on, Kelvin updates itself; 0.1.0 needs a one-time manu
 
 Fan control can damage hardware if it goes wrong, so Kelvin is built to fail safe:
 
-- If the CPU or GPU reaches its limit (90°C / 95°C by default), every fan goes to 100%.
+- If the CPU or GPU reaches its limit (90°C / 95°C by default), every fan Kelvin controls goes to
+  100%. On PCs where Kelvin can't control any fans (most laptops), it doesn't pretend to.
 - If Kelvin stops, crashes, or loses a fan's temperature sensor, that fan goes back to BIOS control.
 - Fans stay on BIOS control until you change them. Installing Kelvin changes nothing on its own.
 - Curves are cleaned up on save: duty never drops as temperature rises, and the hot end reaches 100%.

@@ -1,5 +1,6 @@
 import { icon } from './icons.js';
 import { views } from './views.js';
+import * as safetyNotice from './safety-notice.js';
 
 const ROUTES = [
   { id: 'overview', label: 'Overview' },
@@ -76,6 +77,80 @@ export async function installUpdate() {
   catch (e) { toast(String(e), true); }
 }
 
+// ---- Notifications for temperature alerts
+// The service records alert events; whichever Kelvin window is open turns new ones into
+// notifications. In the desktop app that's a Windows notification, even while it sits in the tray.
+export const notificationsSupported = () => Boolean(tauriInvoke) || 'Notification' in window;
+
+export async function enableBrowserNotifications() {
+  if (tauriInvoke || !('Notification' in window)) return true;
+  return (await Notification.requestPermission()) === 'granted';
+}
+
+async function showNotification(title, body) {
+  if (tauriInvoke) {
+    await tauriInvoke('plugin:notification|notify', { options: { title, body } });
+  } else if ('Notification' in window && Notification.permission === 'granted') {
+    new Notification(title, { body });
+  }
+}
+
+// ---- Safety override notice: a floating card on the right (timing rules in safety-notice.js).
+// State lives in sessionStorage so a reload doesn't bring back a notice you dismissed.
+let safety = (() => {
+  try { return { ...safetyNotice.initial(), ...JSON.parse(sessionStorage.getItem('kelvin.safety') || '{}') }; }
+  catch { return safetyNotice.initial(); }
+})();
+let safetyReason = '';
+
+function saveSafety() {
+  try { sessionStorage.setItem('kelvin.safety', JSON.stringify(safety)); } catch { /* storage off: fine */ }
+}
+
+function updateSafetyNotice(s) {
+  const on = Boolean(s.safety?.override);
+  if (on && s.safety.reason) safetyReason = s.safety.reason;
+  const { state: next, show } = safetyNotice.step(safety, on, Date.now());
+  if (JSON.stringify(next) !== JSON.stringify(safety)) { safety = next; saveSafety(); }
+  const el = document.getElementById('safety-notice');
+
+  if (!show) {
+    if (!el.hidden) { el.hidden = true; el.innerHTML = ''; el.dataset.key = ''; }
+    return;
+  }
+  const title = show === 'override' ? 'Safety override' : 'Cooling down';
+  const body = show === 'override' ? safetyReason : 'Temperatures are back under your safety limits, so fans are following their curves again. This closes after a minute without another override.';
+  const key = `${title}|${body}`;
+  if (el.dataset.key === key && !el.hidden) return;
+  el.dataset.key = key;
+  el.className = `float-notice ${show === 'override' ? 'crit' : 'calm'}`;
+  el.innerHTML = `${icon('shield', 20)}
+    <div class="grow"><strong>${title}</strong><p>${body.replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[c])}</p>
+      <a href="#/settings">Safety limits</a></div>
+    <button type="button" class="close" aria-label="Dismiss">${icon('close', 16)}</button>`;
+  el.hidden = false;
+}
+
+document.getElementById('safety-notice').addEventListener('click', (e) => {
+  if (!e.target.closest('.close')) return;
+  safety = safetyNotice.dismiss(safety);
+  saveSafety();
+  const el = document.getElementById('safety-notice');
+  el.hidden = true;
+  el.innerHTML = '';
+});
+
+let lastAlertId = null;
+function handleAlerts(s) {
+  const recent = s.alerts?.recent ?? [];
+  const newest = recent.reduce((m, e) => Math.max(m, e.id), 0);
+  // On first connect, don't replay alerts from before this window opened.
+  if (lastAlertId === null) { lastAlertId = newest; return; }
+  const fresh = recent.filter((e) => e.id > lastAlertId).sort((a, b) => a.id - b.id).slice(-3);
+  lastAlertId = Math.max(lastAlertId, newest);
+  for (const e of fresh) showNotification(e.title, e.body).catch(() => {});
+}
+
 if (tauriInvoke) {
   setTimeout(() => checkForUpdate(), 10_000);
   setInterval(() => checkForUpdate(), 6 * 60 * 60 * 1000);
@@ -147,6 +222,8 @@ function onState(next) {
   const first = !state;
   state = next;
   connected = true;
+  handleAlerts(state);
+  updateSafetyNotice(state);
   if (first) { route(); }
   else current?.view.update(state);
   const navKey = `${parseHash().id}|${state.recommendations.length}`;
@@ -154,13 +231,17 @@ function onState(next) {
   renderStatus();
 }
 
+// Reconnect quickly at first, then back off (up to 15 s) while the service stays down.
+let retryMs = 1000;
 function connect() {
   const ws = new WebSocket(LIVE_URL);
+  ws.onopen = () => { retryMs = 1000; };
   ws.onmessage = (e) => onState(JSON.parse(e.data));
   ws.onclose = () => {
     connected = false;
     renderStatus();
-    setTimeout(connect, 1500);
+    setTimeout(connect, retryMs);
+    retryMs = Math.min(retryMs * 1.6, 15000);
   };
 }
 
