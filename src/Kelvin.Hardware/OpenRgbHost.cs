@@ -1,5 +1,6 @@
 using System.Diagnostics;
-using System.Net.Sockets;
+using System.Net;
+using System.Net.NetworkInformation;
 
 namespace Kelvin.Hardware;
 
@@ -83,16 +84,37 @@ public sealed class OpenRgbHost(int port = 6742) : IDisposable
         }
     }
 
+    /// <summary>
+    /// Whether something is listening on the SDK port. Reads the system's listener table instead of
+    /// connecting: a bare connection makes OpenRGB log an error every time.
+    /// </summary>
     private bool Listening()
     {
         try
         {
-            using var client = new TcpClient();
-            return client.ConnectAsync("127.0.0.1", port).Wait(200) && client.Connected;
+            return IPGlobalProperties.GetIPGlobalProperties().GetActiveTcpListeners()
+                .Any(e => e.Port == port && (IPAddress.IsLoopback(e.Address) || e.Address.Equals(IPAddress.Any) || e.Address.Equals(IPAddress.IPv6Any)));
         }
         catch
         {
             return false;
+        }
+    }
+
+    /// <summary>True when Kelvin started the OpenRGB that's running, so it may restart it.</summary>
+    public bool IsManaged
+    {
+        get { lock (_gate) return _process is { HasExited: false }; }
+    }
+
+    /// <summary>Restarts the OpenRGB Kelvin started, e.g. when device detection stalled.</summary>
+    public void Restart()
+    {
+        lock (_gate)
+        {
+            if (_process is not { HasExited: false }) return;
+            try { _process.Kill(entireProcessTree: true); _process.WaitForExit(5000); } catch { }
+            Start();
         }
     }
 

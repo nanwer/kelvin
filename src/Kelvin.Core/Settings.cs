@@ -88,6 +88,10 @@ public sealed class KelvinSettings
     public List<Profile> Profiles { get; set; } = [];
     public string? ActiveProfileId { get; set; }
     public ProfileAutomation Automation { get; set; } = new();
+    /// <summary>A profile the user picked by hand, kept across restarts until the situation changes.</summary>
+    public ManualProfileChoice? ManualProfile { get; set; }
+    /// <summary>Lighting devices OpenRGB has found before, so Kelvin notices when detection comes up short.</summary>
+    public List<string> KnownLightingDevices { get; set; } = [];
     /// <summary>Laptop fan mode Kelvin last set, so it can be restored after a restart.</summary>
     public string? FanMode { get; set; }
     public MqttSettings Mqtt { get; set; } = new();

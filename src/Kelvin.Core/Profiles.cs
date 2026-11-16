@@ -30,6 +30,9 @@ public sealed class ProfileAutomation
     public string NightEnd { get; set; } = "07:00";
 }
 
+/// <summary>The profile picked by hand, and the automatic situation it was picked in.</summary>
+public sealed record ManualProfileChoice(string Id, string Key);
+
 public enum ProfileSource { Default, Night, Game, Manual }
 
 public sealed record ProfileStatus(string? ActiveId, ProfileSource Source, string Reason, string? Game);
@@ -68,6 +71,12 @@ public sealed class ProfileEngine
         _processes = processes;
         _now = now ?? (() => DateTimeOffset.Now);
         EnsureDefaults(store);
+        // A choice made before a restart or update still holds.
+        if (store.Read(s => s.ManualProfile) is { } manual && store.Read(s => s.Profiles.Any(p => p.Id == manual.Id)))
+        {
+            _manualId = manual.Id;
+            _manualKey = manual.Key;
+        }
         // Editing fans or lighting saves straight into the active profile.
         store.BeforeSave = s =>
         {
@@ -117,6 +126,7 @@ public sealed class ProfileEngine
             if (!_store.Read(s => s.Profiles.Any(p => p.Id == id))) throw new KeyNotFoundException("That profile doesn't exist.");
             _manualId = id;
             _manualKey = AutoKey(Automatic(lastLoad: null));
+            _store.Mutate(s => s.ManualProfile = new(id, _manualKey));
             Status = Status with { ActiveId = id, Source = ProfileSource.Manual, Reason = "Chosen by you" };
             Activate(id);
         }
@@ -144,7 +154,11 @@ public sealed class ProfileEngine
                 if (active != _manualId) Activate(_manualId);
                 return;
             }
-            _manualId = null;
+            if (_manualId is not null)
+            {
+                _manualId = null;
+                _store.Mutate(s => s.ManualProfile = null);
+            }
 
             if (!automation.Enabled)
             {

@@ -129,4 +129,29 @@ public class ProfileTests
         Run(5);
         Assert.Equal("quiet", Active);
     }
+
+    [Fact]
+    public void A_manual_choice_survives_a_restart()
+    {
+        _engine.SetManual("quiet");
+        Run(2);
+        var restarted = new ProfileEngine(_store, () => _running, () => _now);
+        restarted.Evaluate(Gpu(5));
+        Assert.Equal("quiet", Active);
+        Assert.Equal(ProfileSource.Manual, restarted.Status.Source);
+    }
+
+    [Fact]
+    public void A_manual_choice_is_forgotten_once_the_situation_changes()
+    {
+        _store.Mutate(s => s.Automation.GameProcesses = ["game"]);
+        _engine.SetManual("quiet");
+        _running.Add("game");
+        Run(1);
+        Assert.Null(_store.Read(s => s.ManualProfile));
+        _running.Clear();
+        var restarted = new ProfileEngine(_store, () => _running, () => _now);
+        restarted.Evaluate(Gpu(5));
+        Assert.Equal("balanced", Active);
+    }
 }

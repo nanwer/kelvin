@@ -142,7 +142,30 @@ public sealed class Runtime(
             openRgb?.EnsureRunning();
             if (!rgbHw.IsConnected) rgbHw.Open();
             else rgbHw.Refresh();
+            try { WatchDetection(); } catch { /* never let this stop the watch loop */ }
         } while (await timer.WaitForNextTickAsync(ct));
+    }
+
+    private readonly LightingDetectionWatch _detection = new();
+
+    /// <summary>Restarts Kelvin's OpenRGB once when lighting devices it found before are missing.</summary>
+    private void WatchDetection()
+    {
+        if (openRgb is null || !openRgb.IsManaged) return;
+        var current = rgbHw.Devices.Select(d => d.Name).ToList();
+        var known = store.Read(s => s.KnownLightingDevices);
+        switch (_detection.Check(known, current, rgbHw.IsConnected, DateTimeOffset.Now))
+        {
+            case DetectionAction.Ok when LightingDetectionWatch.Missing(current, known).Count > 0:
+                store.Mutate(s => s.KnownLightingDevices = LightingDetectionWatch.Merge(known, current));
+                break;
+            case DetectionAction.Restart:
+                openRgb.Restart();
+                break;
+            case DetectionAction.Forget:
+                store.Mutate(s => s.KnownLightingDevices = current);
+                break;
+        }
     }
 
     public static string Version { get; } =
