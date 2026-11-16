@@ -84,6 +84,7 @@ public sealed class KelvinSettings
     public List<FanSettings> Fans { get; set; } = [];
     public LightingSettings Lighting { get; set; } = new();
     public SafetySettings Safety { get; set; } = new();
+    public AlertSettings Alerts { get; set; } = new();
     public List<FanProfile> FanProfiles { get; set; } = [];
     public List<string> DismissedRecommendations { get; set; } = [];
 }

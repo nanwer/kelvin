@@ -57,10 +57,11 @@ public class FanEngineTests
     private sealed class FakeHardware : IFanProvider
     {
         public double CpuTemp = 50;
+        public bool NoFans;
         public readonly Dictionary<string, double?> Duty = new() { ["fan"] = null };
         public string Name => "Fake";
         public bool IsSimulated => true;
-        public IReadOnlyList<FanReading> Fans => [new("fan", "CPU Fan", 1000, Duty["fan"], true, false)];
+        public IReadOnlyList<FanReading> Fans => NoFans ? [] : [new("fan", "CPU Fan", 1000, Duty["fan"], true, false)];
         public IReadOnlyList<SensorReading> Sensors =>
             [new("cpu", "CPU", "AMD Ryzen 7 5800X", SensorRole.Cpu, SensorKind.Temperature, CpuTemp, "°C", true)];
         public IReadOnlyList<HardwareInfo> Hardware => [];
@@ -97,6 +98,26 @@ public class FanEngineTests
         Tick(engine);
         Assert.Equal(100, hw.Duty["fan"]);
         Assert.True(engine.Safety.Override);
+    }
+
+    [Fact]
+    public void No_override_when_there_are_no_fans_to_control()
+    {
+        // A laptop: hot CPU, but its fans belong to the laptop's own controller.
+        var hw = new FakeHardware { CpuTemp = 95, NoFans = true };
+        var store = new SettingsStore(Path.Combine(Path.GetTempPath(), $"kelvin-test-{Guid.NewGuid():N}.json"));
+        var engine = new FanEngine(hw, store);
+        Tick(engine);
+        Assert.False(engine.Safety.Override);
+    }
+
+    [Fact]
+    public void Override_message_counts_the_fans_it_controls()
+    {
+        var (hw, engine, _) = Setup();
+        hw.CpuTemp = 95;
+        Tick(engine);
+        Assert.Equal("CPU reached 95°C. The fan Kelvin controls is at full speed until it cools down.", engine.Safety.Reason);
     }
 
     [Fact]

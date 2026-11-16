@@ -120,13 +120,19 @@ public sealed class FanEngine : IDisposable
 
     private string? CheckCritical()
     {
+        // The override exists to force fans Kelvin drives to full speed. With none (e.g. a laptop whose
+        // fans are run by its own controller) it can't do anything, so it never claims to.
+        var controllable = _fans.Count(f => f.Controllable);
+        if (controllable == 0) return null;
+
         var safety = _store.Read(s => s.Safety);
+        var fans = controllable == 1 ? "The fan Kelvin controls is" : $"All {controllable} fans Kelvin controls are";
         foreach (var s in _sensors.Where(s => s.Kind == SensorKind.Temperature && s.Primary))
         {
             if (s.Role == SensorRole.Cpu && s.Value >= safety.CriticalCpuTemp)
-                return $"CPU reached {s.Value:0}°C. All fans are at full speed until it cools down.";
+                return $"CPU reached {s.Value:0}°C. {fans} at full speed until it cools down.";
             if (s.Role == SensorRole.Gpu && s.Value >= safety.CriticalGpuTemp)
-                return $"GPU reached {s.Value:0}°C. All fans are at full speed until it cools down.";
+                return $"GPU reached {s.Value:0}°C. {fans} at full speed until it cools down.";
         }
         return null;
     }

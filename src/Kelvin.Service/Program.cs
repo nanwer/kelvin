@@ -173,7 +173,24 @@ api.MapPut("/safety", (SafetySettings body) =>
     return Results.Ok(body);
 });
 
-api.MapPost("/recommendations/apply", (RecommendationRequest req, Runtime rt) => rt.Apply(req.Id) ? Results.Ok() : Results.NotFound());
+api.MapPut("/alerts", (AlertSettings body) =>
+{
+    body.Rules ??= [];
+    if (body.Rules.Count > 10) return Results.BadRequest(new { error = "Up to 10 alerts are supported." });
+    foreach (var r in body.Rules)
+    {
+        if (string.IsNullOrWhiteSpace(r.Id) || r.Id.Length > 32) r.Id = Guid.NewGuid().ToString("N")[..8];
+        if (!double.IsFinite(r.Threshold) || r.Threshold is < 40 or > 110)
+            return Results.BadRequest(new { error = "Alert temperatures must be between 40 and 110°C." });
+        r.SustainSeconds = double.IsFinite(r.SustainSeconds) ? Math.Clamp(Math.Round(r.SustainSeconds), 0, 600) : 10;
+    }
+    store.Mutate(s => s.Alerts = body);
+    return Results.Ok(body);
+});
+
+api.MapPost("/alerts/test", (Runtime rt) => Results.Ok(rt.Alerts.Test()));
+
+api.MapPost("/recommendations/apply",(RecommendationRequest req, Runtime rt) => rt.Apply(req.Id) ? Results.Ok() : Results.NotFound());
 api.MapPost("/conflicts/close", (RecommendationRequest req, Runtime rt) =>
 {
     var result = rt.CloseConflict(req.Id);

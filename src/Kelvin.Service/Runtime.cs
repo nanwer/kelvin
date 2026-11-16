@@ -18,6 +18,8 @@ public sealed class Runtime(
     private readonly CancellationTokenSource _cts = new();
     private HealthReport? _health;
     private DateTimeOffset _nextAnalysis = DateTimeOffset.MinValue;
+
+    public AlertMonitor Alerts { get; } = new();
     private readonly List<Task> _loops = [];
     private IReadOnlyList<Conflict> _conflicts = [];
     private Task? _calibration;
@@ -33,7 +35,19 @@ public sealed class Runtime(
         _loops.Add(fans.RunAsync(_cts.Token));
         _loops.Add(lighting.RunAsync(_cts.Token));
         _loops.Add(WatchAsync(_cts.Token));
+        _loops.Add(AlertsAsync(_cts.Token));
         return Task.CompletedTask;
+    }
+
+    /// <summary>Checks alert rules every second, so "above 85°C for 10 s" means 10 s.</summary>
+    private async Task AlertsAsync(CancellationToken ct)
+    {
+        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(1));
+        while (await timer.WaitForNextTickAsync(ct))
+        {
+            try { Alerts.Evaluate(store.Current.Alerts, fans.Sensors, fans.Safety, _health); }
+            catch (Exception) { /* a bad reading must never stop alerting for good */ }
+        }
     }
 
     private async Task WatchAsync(CancellationToken ct)
@@ -240,6 +254,8 @@ public sealed class Runtime(
             preview = lighting.Preview,
             conflicts = _conflicts,
             health = _health,
+            alertSettings = settings.Alerts,
+            alerts = new { recent = Alerts.Recent.TakeLast(20).Reverse(), firing = Alerts.Firing },
             recommendations = Recommendations(),
             presets = Curves.Presets,
         };

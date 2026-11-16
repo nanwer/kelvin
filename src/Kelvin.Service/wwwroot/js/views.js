@@ -1,4 +1,7 @@
-import { api, toast, go, getUpdate, canUpdate, checkForUpdate, installUpdate } from './app.js';
+import {
+  api, toast, go, getUpdate, canUpdate, checkForUpdate, installUpdate,
+  canUpdate as isDesktopApp, notificationsSupported, enableBrowserNotifications,
+} from './app.js';
 import { icon } from './icons.js';
 import { createCurveEditor } from './curve.js';
 import {
@@ -19,8 +22,14 @@ function banners(state, { showSimulated = false } = {}) {
       <p>You have ${esc(update.currentVersion)}. Updating takes under a minute. Your fans go back to BIOS control for those few seconds, then Kelvin picks up where it left off.</p></div>
       <button class="btn sm primary" data-install-update>Update now</button></div>`);
   }
-  if (state.safety.override) {
-    out.push(`<div class="banner crit" role="alert">${icon('shield')}<div class="grow"><strong>Safety override</strong><p>${esc(state.safety.reason)}</p></div></div>`);
+  // The safety override has its own floating notice (see safetyNotice in app.js).
+  for (const id of state.alerts?.firing ?? []) {
+    const rule = state.alertSettings?.rules.find((r) => r.id === id);
+    if (!rule) continue;
+    const now = alertSensor(state, rule.source)?.value;
+    out.push(`<div class="banner warn" role="status">${icon('alert')}<div class="grow"><strong>${esc(SOURCE_NAME[rule.source])} is above your ${Math.round(rule.threshold)}°C alert</strong>
+      <p>${now != null ? `Now ${Math.round(now)}°C. ` : ''}Kelvin notified you when it crossed the limit. This clears once it's ${Math.round(rule.threshold - 3)}°C or cooler.</p></div>
+      <a class="btn sm" href="#/settings">Alerts</a></div>`);
   }
   if (state.system.fanDriverInstalled === false) {
     out.push(`<div class="banner warn">${icon('alert')}<div class="grow"><strong>Motherboard fans need the PawnIO driver</strong>
@@ -46,6 +55,14 @@ function banners(state, { showSimulated = false } = {}) {
       <p>${state.system.elevated ? 'The service was started with --simulate.' : 'The Kelvin service needs administrator rights to read and control your real fans.'} Everything works, but nothing reaches your PC.</p></div></div>`);
   }
   return out.join('');
+}
+
+const SOURCE_NAME = { cpu: 'CPU', gpu: 'Graphics card', board: 'Motherboard', hottest: 'Hottest of CPU and GPU' };
+
+// The temperature an alert rule watches, matching AlertMonitor.SensorFor on the server.
+function alertSensor(state, source) {
+  if (source === 'hottest') return state.sensors.find((s) => s.id === 'virtual/hottest');
+  return state.sensors.find((s) => s.primary && s.kind === 'temperature' && s.role === source);
 }
 
 // What to say when lighting isn't connected, based on what Kelvin knows about OpenRGB.
@@ -800,6 +817,23 @@ function settingsView(root) {
         <div class="actions"><button class="btn primary" id="st-save">Save limits</button></div>
       </div>
     </section>
+    <section class="panel" id="alerts">
+      <div class="panel-head"><h2>Temperature alerts</h2>
+        <label class="switch" title="Temperature alerts on or off"><input type="checkbox" id="al-enabled" aria-label="Temperature alerts on"><span></span></label></div>
+      <div class="panel-body stack">
+        <p class="muted" style="max-width:72ch">Get a notification when a temperature stays above a limit you choose. Unlike the safety limits above, alerts only tell you; they don't change your fans.</p>
+        <div id="al-rules" class="alert-rules"></div>
+        <div><button type="button" class="btn sm ghost" id="al-add">${icon('plus', 16)} Add alert</button></div>
+        <label class="check"><input type="checkbox" id="al-safety"> Also notify me when a safety limit forces the fans to full speed</label>
+        <label class="check"><input type="checkbox" id="al-health"> Also notify me when Health finds a part running hotter than a few weeks ago</label>
+        <div class="actions">
+          <button class="btn primary" id="al-save" disabled>Save alerts</button>
+          <button class="btn" id="al-test">Send a test notification</button>
+        </div>
+        <p class="faint" id="al-where"></p>
+        <div id="al-recent"></div>
+      </div>
+    </section>
     <section class="panel" id="st-app" hidden>
       <div class="panel-head"><h2>App</h2></div>
       <div class="device">
@@ -837,6 +871,81 @@ function settingsView(root) {
       </div>
     </section>
   </div>`;
+
+  // ---- Temperature alerts editor
+  let alerts = null;       // draft
+  let alertsBase = null;   // last saved
+  const $a = (sel) => root.querySelector(sel);
+
+  function renderRules(state) {
+    $a('#al-rules').innerHTML = alerts.rules.map((r, i) => `
+      <div class="alert-rule" data-i="${i}">
+        <label class="switch" title="${r.enabled ? 'On' : 'Off'}"><input type="checkbox" data-k="enabled" ${r.enabled ? 'checked' : ''} aria-label="Alert ${i + 1} on"><span></span></label>
+        <select data-k="source" aria-label="Temperature to watch">
+          ${Object.entries(SOURCE_NAME).map(([v, l]) => `<option value="${v}" ${v === r.source ? 'selected' : ''}>${l}</option>`).join('')}
+        </select>
+        <span class="muted">above</span>
+        <input type="number" data-k="threshold" min="40" max="110" step="1" value="${Math.round(r.threshold)}" aria-label="Alert temperature in °C">
+        <span class="muted">°C for</span>
+        <input type="number" data-k="sustainSeconds" min="0" max="600" step="1" value="${Math.round(r.sustainSeconds)}" aria-label="Seconds above before alerting">
+        <span class="muted">s</span>
+        <span class="alert-now faint"></span>
+        <button type="button" class="btn sm ghost" data-remove aria-label="Remove this alert">Remove</button>
+      </div>`).join('') || '<p class="faint">No alerts yet. Add one to get notified.</p>';
+    updateRuleLive(state);
+  }
+
+  function updateRuleLive(state) {
+    const firing = new Set(state.alerts?.firing ?? []);
+    root.querySelectorAll('.alert-rule').forEach((row) => {
+      const r = alerts.rules[Number(row.dataset.i)];
+      const v = alertSensor(state, r.source)?.value;
+      const el = row.querySelector('.alert-now');
+      el.innerHTML = firing.has(r.id)
+        ? `<span class="tag warn">Above now · ${Math.round(v)}°C</span>`
+        : v != null ? `now ${Math.round(v)}°C` : 'no sensor';
+    });
+  }
+
+  function alertsChanged() { $a('#al-save').disabled = same(alerts, alertsBase); }
+
+  $a('#al-rules').addEventListener('input', (e) => {
+    const row = e.target.closest('.alert-rule'); if (!row) return;
+    const r = alerts.rules[Number(row.dataset.i)];
+    const k = e.target.dataset.k;
+    r[k] = k === 'enabled' ? e.target.checked : k === 'source' ? e.target.value : Number(e.target.value);
+    if (k === 'source') updateRuleLive(lastSettingsState);
+    alertsChanged();
+  });
+  $a('#al-rules').addEventListener('click', (e) => {
+    if (!e.target.closest('[data-remove]')) return;
+    alerts.rules.splice(Number(e.target.closest('.alert-rule').dataset.i), 1);
+    renderRules(lastSettingsState); alertsChanged();
+  });
+  $a('#al-add').addEventListener('click', () => {
+    if (alerts.rules.length >= 10) { toast('Up to 10 alerts are supported.', true); return; }
+    alerts.rules.push({ id: Math.random().toString(36).slice(2, 10), enabled: true, source: 'cpu', threshold: 85, sustainSeconds: 10 });
+    renderRules(lastSettingsState); alertsChanged();
+  });
+  for (const [sel, key] of [['#al-enabled', 'enabled'], ['#al-safety', 'notifyOnSafety'], ['#al-health', 'notifyOnHealth']]) {
+    $a(sel).addEventListener('change', (e) => { alerts[key] = e.target.checked; alertsChanged(); });
+  }
+  $a('#al-save').addEventListener('click', () => run(async () => {
+    await enableBrowserNotifications();
+    const saved = await api('PUT', '/alerts', alerts);
+    alerts = clone(saved); alertsBase = clone(saved);
+    renderRules(lastSettingsState); alertsChanged();
+  }, 'Alerts saved'));
+  $a('#al-test').addEventListener('click', () => run(async () => {
+    if (!(await enableBrowserNotifications())) throw new Error('Notifications are blocked for this page. Allow them in your browser settings.');
+    await api('POST', '/alerts/test');
+  }, 'Test sent. A notification should appear in a moment.'));
+  $a('#al-where').textContent = !notificationsSupported()
+    ? 'This browser can\'t show notifications. Use the Kelvin app instead.'
+    : isDesktopApp()
+      ? 'Notifications appear even while Kelvin is in the tray. They stop only if you quit the app from its tray icon.'
+      : 'In a browser, notifications only appear while this tab is open. The Kelvin app shows them even from the tray.';
+  let lastSettingsState = null;
 
   if (canUpdate()) {
     root.querySelector('#st-updates').hidden = false;
@@ -891,6 +1000,22 @@ function settingsView(root) {
         root.querySelector('#st-gpu').value = state.safetySettings.criticalGpuTemp;
         loaded = true;
       }
+      lastSettingsState = state;
+      if (!alerts && state.alertSettings) {
+        alerts = clone(state.alertSettings); alertsBase = clone(state.alertSettings);
+        $a('#al-enabled').checked = alerts.enabled;
+        $a('#al-safety').checked = alerts.notifyOnSafety;
+        $a('#al-health').checked = alerts.notifyOnHealth;
+        renderRules(state);
+      } else if (alerts) {
+        updateRuleLive(state);
+      }
+      const recent = state.alerts?.recent ?? [];
+      $a('#al-recent').innerHTML = recent.length
+        ? `<span class="label" style="font-size:12.5px;color:var(--text-2);font-weight:500">Recent alerts</span>
+           <ul class="alert-log">${recent.slice(0, 5).map((e) => `<li><span class="faint">${new Date(e.at).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' })}</span> ${esc(e.title)}</li>`).join('')}</ul>`
+        : '';
+
       const s = state.system;
       root.querySelector('#st-version').textContent = `Version ${s.version}`;
       const u = getUpdate();

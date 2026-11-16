@@ -9,6 +9,7 @@ const paths = {
   alert: '<path d="M10 3.2 17.4 16H2.6Z"/><path d="M10 8.2v3.6M10 13.9v.1"/>',
   info: '<circle cx="10" cy="10" r="7"/><path d="M10 9v4.4M10 6.6v.1"/>',
   check: '<path d="m4.5 10.5 3.5 3.5 7.5-8"/>',
+  close: '<path d="m5.5 5.5 9 9M14.5 5.5l-9 9"/>',
   plus: '<path d="M10 4.5v11M4.5 10h11"/>',
   shield: '<path d="M10 2.8 16 5v4.6c0 3.6-2.5 6.3-6 7.6-3.5-1.3-6-4-6-7.6V5Z"/>',
   gauge: '<path d="M3.5 13.5a6.5 6.5 0 1 1 13 0"/><path d="m10 13.5 3-4"/>',

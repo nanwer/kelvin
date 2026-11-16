@@ -12,22 +12,40 @@ permissions:
   contents: write
 
 jobs:
+  # Decides whether to build. Skips (with a warning, not a failure) when the updater key isn't
+  # configured, or when this tag's release already exists because it was published by hand.
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      build: ${{ steps.decide.outputs.build }}
+    steps:
+      - id: decide
+        env:
+          HAS_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "$HAS_KEY" != "true" ]; then
+            echo "::warning::Skipped: add the TAURI_SIGNING_PRIVATE_KEY and TAURI_SIGNING_PRIVATE_KEY_PASSWORD secrets to build releases here. See docs/RELEASING.md."
+            echo "build=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          if [ "${{ github.ref_type }}" = "tag" ] && gh release view "${{ github.ref_name }}" -R "${{ github.repository }}" >/dev/null 2>&1; then
+            echo "::warning::Skipped: release ${{ github.ref_name }} already exists."
+            echo "build=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          echo "build=true" >> "$GITHUB_OUTPUT"
+
   release:
+    needs: check
+    if: needs.check.outputs.build == 'true'
     runs-on: windows-latest
     env:
-      # Updater signing key (required). Without it, users can't verify updates, so the job stops.
+      # Updater signing key: every update must be signed so installed copies can verify it.
       TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
       TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
       # Code signing through SignPath (optional until SignPath approves the project).
       SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
     steps:
       - uses: actions/checkout@v4
-
-      - name: Check the updater key is configured
-        if: env.TAURI_SIGNING_PRIVATE_KEY == ''
-        run: |
-          echo "::error::Add the TAURI_SIGNING_PRIVATE_KEY and TAURI_SIGNING_PRIVATE_KEY_PASSWORD repository secrets. See docs/RELEASING.md."
-          exit 1
 
       - uses: actions/setup-dotnet@v4
         with:
