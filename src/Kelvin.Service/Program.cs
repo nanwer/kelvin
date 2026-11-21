@@ -133,7 +133,7 @@ api.MapPut("/fans", (FanSettings body, Runtime rt) =>
         var clean = body.Clone();
         clean.FixedPercent = Math.Clamp(clean.FixedPercent, 0, 100);
         clean.MinPercent = Math.Clamp(clean.MinPercent, 0, 60);
-        clean.ResponseSeconds = Math.Clamp(clean.ResponseSeconds, 1, 30);
+        clean.SmoothSeconds = Math.Clamp(clean.SmoothSeconds, 0, 120);
         if (clean.Mode == FanMode.Curve) clean.Points = Curves.Sanitize(clean.Points);
         store.Mutate(s => { s.Fans.RemoveAll(f => f.FanId == clean.FanId); s.Fans.Add(clean); });
         return Results.Ok(clean);

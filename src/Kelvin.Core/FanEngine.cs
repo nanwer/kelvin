@@ -17,6 +17,16 @@ public sealed class FanEngine : IDisposable
     private readonly SettingsStore _store;
     private readonly object _gate = new();
     private readonly Dictionary<string, double> _applied = new();
+    // The averaged temperature each fan follows, and which sensor it was averaged from.
+    private readonly Dictionary<string, (string Sensor, double Temp)> _smoothed = new();
+
+    /// <summary>
+    /// However long the averaging, a fan never treats the temperature as more than this far below
+    /// the live reading. A real, sustained rise therefore gets a response straight away.
+    /// </summary>
+    public const double SpikeHeadroom = 15;
+    /// <summary>How fast the duty itself moves, so changes are heard as a glide, not a step.</summary>
+    private const double RampUpSeconds = 2, RampDownSeconds = 4;
     private readonly HashSet<string> _controlled = new();
     private readonly Dictionary<string, Queue<double>> _history = new();
     private IReadOnlyList<SensorReading> _sensors = [];
@@ -102,7 +112,7 @@ public sealed class FanEngine : IDisposable
                         Release(fan.Id);
                         continue;
                     }
-                    target = Curves.Evaluate(cfg.Points, source.Value);
+                    target = Curves.Evaluate(cfg.Points, Smooth(fan.Id, source, cfg.SmoothSeconds, dt));
                 }
 
                 var floor = Math.Max(cfg.MinPercent, fan.IsPump ? 50 : 0);
@@ -110,12 +120,31 @@ public sealed class FanEngine : IDisposable
 
                 var current = _applied.TryGetValue(fan.Id, out var c) ? c : fan.Percent ?? target;
                 // Ramp up twice as fast as down: react to heat quickly, settle quietly.
-                var tau = Math.Max(target > current ? cfg.ResponseSeconds / 2 : cfg.ResponseSeconds, 0.1);
+                var tau = target > current ? RampUpSeconds : RampDownSeconds;
                 var next = current + (target - current) * (1 - Math.Exp(-dt / tau));
                 if (Math.Abs(next - target) < 0.5) next = target;
                 Apply(fan.Id, next);
             }
         }
+    }
+
+    /// <summary>
+    /// The temperature a fan's curve is read at: the running average, but never more than
+    /// <see cref="SpikeHeadroom"/> below the live reading. A short spike barely moves it; a real
+    /// rise moves it at once and fully within a minute or so. Critical temperatures bypass all of
+    /// this (see <see cref="CheckCritical"/>).
+    /// </summary>
+    private double Smooth(string fanId, SensorReading source, double seconds, double dt)
+    {
+        var raw = source.Value;
+        if (seconds <= 0 || !_smoothed.TryGetValue(fanId, out var prev) || prev.Sensor != source.Id)
+        {
+            _smoothed[fanId] = (source.Id, raw);
+            return raw;
+        }
+        var avg = prev.Temp + (raw - prev.Temp) * (1 - Math.Exp(-dt / seconds));
+        _smoothed[fanId] = (source.Id, avg);
+        return Math.Max(avg, raw - SpikeHeadroom);
     }
 
     private string? CheckCritical()

@@ -255,7 +255,7 @@ function bindRowLinks(root) {
 
 // ---------------------------------------------------------------- Fans
 
-const DEFAULT_RESPONSE = 6;
+const DEFAULT_SMOOTH = 30;
 
 function fansView(root, { param }) {
   root.innerHTML = `<div class="page">
@@ -323,7 +323,7 @@ function fansView(root, { param }) {
     const src = lastState.sensors.find((s) => s.primary && s.role === role);
     return {
       fanId: fan.id, mode: 'bios', fixedPercent: 50, sourceSensorId: src?.id ?? 'virtual/hottest',
-      points: clone(lastState.presets.balanced), minPercent: 20, responseSeconds: DEFAULT_RESPONSE, preset: 'balanced',
+      points: clone(lastState.presets.balanced), minPercent: 20, smoothSeconds: DEFAULT_SMOOTH, preset: 'balanced',
     };
   }
 
@@ -391,8 +391,8 @@ function fansView(root, { param }) {
               <div class="slider"><input type="range" id="fx-min" min="0" max="60" value="${d.minPercent}"><output>${Math.round(d.minPercent)}%</output></div>
               <span class="hint">${p?.stopPercent != null ? `This fan stalls at ${p.stopPercent}% or below.` : 'Keeps the fan from stalling at low speed.'}</span></div>
             <div class="field"><label for="fx-resp">Reaction to spikes</label>
-              <div class="slider"><input type="range" id="fx-resp" min="1" max="20" value="${d.responseSeconds}"><output>${d.responseSeconds}s</output></div>
-              <span class="hint">Slower ignores short spikes, so the fan doesn't rev every time an app opens.</span></div>
+              <div class="slider"><input type="range" id="fx-resp" min="0" max="90" step="5" value="${d.smoothSeconds ?? DEFAULT_SMOOTH}"><output>${d.smoothSeconds ?? DEFAULT_SMOOTH}s</output></div>
+              <span class="hint">The fan follows the average temperature over about this long, so it doesn't rev at every short spike. A big, lasting rise still gets a response straight away.</span></div>
           </div>` : ''}
         ${p ? `
           <div class="field"><span class="label">Measured</span>
@@ -417,7 +417,7 @@ function fansView(root, { param }) {
     });
     bindSlider('#fx-fixed', (v) => { draft.fixedPercent = v; return `${v}%`; });
     bindSlider('#fx-min', (v) => { draft.minPercent = v; return `${v}%`; });
-    bindSlider('#fx-resp', (v) => { draft.responseSeconds = v; return `${v}s`; });
+    bindSlider('#fx-resp', (v) => { draft.smoothSeconds = v; return `${v}s`; });
     el.querySelector('#fx-source')?.addEventListener('change', (e) => { draft.sourceSensorId = e.target.value; syncFoot(); });
     el.querySelector('#fx-revert').addEventListener('click', () => { draft = clone(base); renderEditor(); });
     el.querySelector('#fx-save').addEventListener('click', save);

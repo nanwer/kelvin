@@ -16,14 +16,18 @@ public sealed class FanSettings
     public List<CurvePoint> Points { get; set; } = [];
     /// <summary>Never drive the fan below this, so it can't stall.</summary>
     public double MinPercent { get; set; } = 20;
-    /// <summary>Smoothing time constant. Higher = calmer fans when temps spike briefly.</summary>
-    public double ResponseSeconds { get; set; } = 6;
+    /// <summary>
+    /// How long a temperature has to stay up before the fan fully follows it. Modern CPUs jump
+    /// 20°C or more for a few seconds at a time; the fan follows the average over about this long,
+    /// so it doesn't rev at every spike. 0 follows the raw reading.
+    /// </summary>
+    public double SmoothSeconds { get; set; } = 30;
     public string Preset { get; set; } = "custom";
 
     public FanSettings Clone() => new()
     {
         FanId = FanId, Mode = Mode, FixedPercent = FixedPercent, SourceSensorId = SourceSensorId,
-        Points = [.. Points], MinPercent = MinPercent, ResponseSeconds = ResponseSeconds, Preset = Preset,
+        Points = [.. Points], MinPercent = MinPercent, SmoothSeconds = SmoothSeconds, Preset = Preset,
     };
 }
 

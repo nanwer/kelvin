@@ -140,8 +140,8 @@ public static class Advisor
 
         if (isRyzen && s.SourceSensorId == cpu?.Id)
         {
-            s.ResponseSeconds = 10;
-            why.Add("Ryzen CPUs jump 10–15°C the moment a task starts. A slower response stops the fan revving at every spike.");
+            s.SmoothSeconds = 45;
+            why.Add("Ryzen CPUs jump 20°C or more for a few seconds at a time. Following the average over 45 seconds stops the fan revving at every spike.");
         }
 
         var label = s.Preset switch { "silent" => "a quiet curve", "performance" => "a stronger curve", _ => "a balanced curve" };

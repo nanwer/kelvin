@@ -78,7 +78,7 @@ public class FanEngineTests
         var store = new SettingsStore(Path.Combine(Path.GetTempPath(), $"kelvin-test-{Guid.NewGuid():N}.json"));
         store.Mutate(s => s.Fans.Add(new FanSettings
         {
-            FanId = "fan", Mode = FanMode.Fixed, FixedPercent = 30, MinPercent = 0, ResponseSeconds = 0.1,
+            FanId = "fan", Mode = FanMode.Fixed, FixedPercent = 30, MinPercent = 0, SmoothSeconds = 0,
         }));
         return (hw, new FanEngine(hw, store), store);
     }
@@ -86,6 +86,58 @@ public class FanEngineTests
     private static void Tick(FanEngine engine) =>
         typeof(FanEngine).GetMethod("Tick", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
             .Invoke(engine, [1.0]);
+
+    private static (FakeHardware, FanEngine) CurveSetup(double smoothSeconds)
+    {
+        var hw = new FakeHardware { CpuTemp = 52 };
+        var store = new SettingsStore(Path.Combine(Path.GetTempPath(), $"kelvin-test-{Guid.NewGuid():N}.json"));
+        store.Mutate(s => s.Fans.Add(new FanSettings
+        {
+            FanId = "fan", Mode = FanMode.Curve, SourceSensorId = "cpu", MinPercent = 0, SmoothSeconds = smoothSeconds,
+            Points = [.. Curves.Presets["balanced"]],
+        }));
+        var engine = new FanEngine(hw, store);
+        for (var i = 0; i < 30; i++) Tick(engine);   // settle at 52°C
+        return (hw, engine);
+    }
+
+    // What a Ryzen 7 5800X did at light load on a real PC: 52°C to 76°C and back within 25 seconds.
+    private static readonly double[] RealSpike =
+        [54.3, 54.1, 53.5, 56.4, 58.8, 64.4, 67.9, 69.3, 70.9, 71.1, 72, 72.1, 72.1, 71.9, 71.5, 71.5, 72.9, 73.5, 74.8, 75.5, 76, 75.9, 75.1, 74.3, 73.5, 72.6,
+         70.6, 67.8, 64.6, 61.3, 58.5, 56.6, 55, 54, 53, 52, 52, 52, 52, 52];
+
+    private static double Peak(FakeHardware hw, FanEngine engine, IEnumerable<double> temps)
+    {
+        var peak = 0.0;
+        foreach (var t in temps) { hw.CpuTemp = t; Tick(engine); peak = Math.Max(peak, hw.Duty["fan"]!.Value); }
+        return peak;
+    }
+
+    [Fact]
+    public void A_short_temperature_spike_barely_moves_the_fan()
+    {
+        var (rawHw, rawEngine) = CurveSetup(smoothSeconds: 0);
+        var (hw, engine) = CurveSetup(smoothSeconds: 30);
+        var settled = hw.Duty["fan"]!.Value;
+        Assert.InRange(settled, 38, 39.5);                       // the curve's value at 52°C
+
+        var unsmoothed = Peak(rawHw, rawEngine, RealSpike);
+        var smoothed = Peak(hw, engine, RealSpike);
+        Assert.True(unsmoothed > 68, $"following the raw reading should rev to about 70%, got {unsmoothed:0.0}");
+        Assert.True(smoothed < 52, $"expected a small bump, got {smoothed:0.0}%");
+    }
+
+    [Fact]
+    public void A_lasting_rise_still_gets_a_quick_and_then_full_response()
+    {
+        var (hw, engine) = CurveSetup(smoothSeconds: 30);
+        hw.CpuTemp = 85;
+        for (var i = 0; i < 10; i++) Tick(engine);
+        // Straight away the fan treats it as at least 85 - 15 = 70°C, which is 60% on this curve.
+        Assert.True(hw.Duty["fan"] >= 59, $"got {hw.Duty["fan"]:0.0}%");
+        for (var i = 0; i < 120; i++) Tick(engine);
+        Assert.True(hw.Duty["fan"] >= 90, $"got {hw.Duty["fan"]:0.0}%");   // 85°C is 94% on this curve
+    }
 
     [Fact]
     public void Critical_cpu_temperature_forces_full_speed()
