@@ -1,0 +1,3 @@
+Wix Madefor Display and Wix Madefor Text
+Copyright 2023 The Wix Madefor Project Authors (https://github.com/wix/wixmadefor)
+Licensed under the SIL Open Font License, Version 1.1: https://openfontlicense.org

@@ -28,6 +28,10 @@ Kelvin includes or installs the following software. Each keeps its own license.
 - License: MIT or Apache 2.0
 - Source: https://github.com/tauri-apps/tauri
 
+### Wix Madefor Display and Wix Madefor Text (fonts)
+- Copyright 2023 The Wix Madefor Project Authors. https://github.com/wix/wixmadefor
+- SIL Open Font License 1.1. Shipped unmodified in the app's `fonts` folder.
+
 ## Installed by Kelvin's installer, not shipped
 
 ### PawnIO driver 2.2.0

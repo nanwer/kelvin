@@ -48,7 +48,7 @@ export function sensorLabel(s) {
   if (!s) return 'Unknown sensor';
   if (s.role === 'virtual') return s.name;
   const hw = s.role === 'cpu' ? 'CPU' : s.role === 'gpu' ? 'GPU' : s.role === 'board' ? 'Motherboard' : s.hardware;
-  return s.name.toLowerCase().startsWith(hw.toLowerCase()) ? s.name : `${hw} · ${s.name}`;
+  return s.name.toLowerCase().startsWith(hw.toLowerCase()) ? s.name : `${hw}, ${s.name}`;
 }
 
 export function describeControl(fan, state) {
@@ -59,5 +59,5 @@ export function describeControl(fan, state) {
   const src = state.sensors.find((x) => x.id === s.sourceSensorId);
   const preset = s.preset && s.preset !== 'custom' ? s.preset[0].toUpperCase() + s.preset.slice(1) : 'Custom';
   const follows = !src ? 'no sensor' : src.role === 'virtual' ? 'hottest' : src.role === 'cpu' ? 'CPU' : src.role === 'gpu' ? 'GPU' : src.name;
-  return `${preset} · follows ${follows}`;
+  return `${preset}, follows ${follows}`;
 }

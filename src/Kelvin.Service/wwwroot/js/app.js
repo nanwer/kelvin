@@ -229,7 +229,7 @@ function renderProfileSwitch(s) {
   const key = JSON.stringify([s.profiles, s.activeProfileId, status.source, status.reason]);
   if (key === switchKey) return;
   switchKey = key;
-  const why = status.source === 'manual' ? 'Chosen by you' : `${SOURCE_LABEL[status.source] ?? 'Auto'} · ${status.reason ?? ''}`;
+  const why = status.source === 'manual' ? 'Chosen by you' : `${SOURCE_LABEL[status.source] ?? 'Auto'}: ${status.reason ?? ''}`;
   el.innerHTML = `
     <label for="profile-select" class="profile-label">Profile</label>
     <select id="profile-select" aria-describedby="profile-why">

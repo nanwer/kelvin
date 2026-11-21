@@ -24,15 +24,15 @@ export function createCurveEditor(host, { points, onChange }) {
         <defs>
           <linearGradient id="thermal-x" x1="${L}" x2="${W - R}" y1="0" y2="0" gradientUnits="userSpaceOnUse">${stops}</linearGradient>
           <linearGradient id="area-fill" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0" stop-color="#7aa7ff" stop-opacity="0.28"/>
-            <stop offset="1" stop-color="#7aa7ff" stop-opacity="0.02"/>
+            <stop class="area-stop" offset="0" stop-opacity="0.28"/>
+            <stop class="area-stop" offset="1" stop-opacity="0.02"/>
           </linearGradient>
         </defs>
         <rect x="${L}" y="${T}" width="${W - L - R}" height="${H - T - B}" fill="url(#thermal-x)" opacity="0.07"/>
         <g class="grid"></g>
         <rect x="${L}" y="${H - B + 6}" width="${W - L - R}" height="4" rx="2" fill="url(#thermal-x)"/>
         <path class="area" fill="url(#area-fill)"/>
-        <path class="line" fill="none" stroke="#7aa7ff" stroke-width="2.25" stroke-linejoin="round"/>
+        <path class="line" fill="none" stroke-width="2.25" stroke-linejoin="round"/>
         <g class="live"></g>
         <g class="points"></g>
       </svg>
@@ -48,12 +48,12 @@ export function createCurveEditor(host, { points, onChange }) {
 
   let g = '';
   for (let t = 30; t <= 90; t += 10) {
-    g += `<line x1="${x(t)}" x2="${x(t)}" y1="${T}" y2="${H - B}" stroke="#252a39"/>`;
-    g += `<text x="${x(t)}" y="${H - 8}" fill="#8189a3" font-size="11.5" text-anchor="middle">${t}°</text>`;
+    g += `<line x1="${x(t)}" x2="${x(t)}" y1="${T}" y2="${H - B}"/>`;
+    g += `<text x="${x(t)}" y="${H - 8}" font-size="11.5" text-anchor="middle">${t}°</text>`;
   }
   for (let p = 0; p <= 100; p += 25) {
-    g += `<line x1="${L}" x2="${W - R}" y1="${y(p)}" y2="${y(p)}" stroke="#252a39"/>`;
-    g += `<text x="${L - 8}" y="${y(p) + 4}" fill="#8189a3" font-size="11.5" text-anchor="end">${p}%</text>`;
+    g += `<line x1="${L}" x2="${W - R}" y1="${y(p)}" y2="${y(p)}"/>`;
+    g += `<text x="${L - 8}" y="${y(p) + 4}" font-size="11.5" text-anchor="end">${p}%</text>`;
   }
   grid.innerHTML = g;
 
@@ -78,9 +78,7 @@ export function createCurveEditor(host, { points, onChange }) {
       c.setAttribute('cx', x(p.temp));
       c.setAttribute('cy', y(p.percent));
       c.setAttribute('r', 7);
-      c.setAttribute('fill', '#0b0d12');
-      c.setAttribute('stroke', '#eceef5');
-      c.setAttribute('stroke-width', 2);
+          c.setAttribute('stroke-width', 2);
       c.setAttribute('class', 'point');
       c.setAttribute('tabindex', '0');
       c.setAttribute('role', 'slider');
@@ -95,12 +93,12 @@ export function createCurveEditor(host, { points, onChange }) {
     if (!live || live.temp == null) { liveG.innerHTML = ''; return; }
     const lx = x(clamp(live.temp, T_MIN, T_MAX));
     const ly = y(clamp(live.percent ?? 0, 0, 100));
-    const label = `${Math.round(live.temp)}°C · ${Math.round(live.percent ?? 0)}%`;
+    const label = `${Math.round(live.temp)}°C, ${Math.round(live.percent ?? 0)}%`;
     const anchorEnd = lx > W - 140;
     liveG.innerHTML = `
-      <line x1="${lx}" x2="${lx}" y1="${T}" y2="${H - B}" stroke="#eceef5" stroke-opacity="0.35" stroke-dasharray="3 4"/>
-      <circle cx="${lx}" cy="${ly}" r="5" fill="#eceef5"/>
-      <text x="${lx + (anchorEnd ? -10 : 10)}" y="${Math.max(ly - 10, T + 12)}" fill="#eceef5" font-size="12" font-weight="600" text-anchor="${anchorEnd ? 'end' : 'start'}">${label}</text>`;
+      <line x1="${lx}" x2="${lx}" y1="${T}" y2="${H - B}" stroke-opacity="0.35" stroke-dasharray="3 4"/>
+      <circle cx="${lx}" cy="${ly}" r="5"/>
+      <text x="${lx + (anchorEnd ? -10 : 10)}" y="${Math.max(ly - 10, T + 12)}" font-size="12" font-weight="600" text-anchor="${anchorEnd ? 'end' : 'start'}">${label}</text>`;
   }
 
   function limits(i) {

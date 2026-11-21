@@ -11,6 +11,7 @@ import {
 
 const ROLE_ORDER = { cpu: 0, gpu: 1, board: 2 };
 const ROLE_NAME = { cpu: 'CPU', gpu: 'Graphics card', board: 'Motherboard' };
+const ROLE_SHORT = { cpu: 'CPU', gpu: 'GPU', board: 'Board' };
 
 // ---------------------------------------------------------------- shared pieces
 
@@ -98,7 +99,7 @@ function historyChart(values) {
 
 function ledStrip(colors, count) {
   const n = Math.min(colors?.length || count || 1, 24);
-  return `<div class="leds" aria-hidden="true">${Array.from({ length: n }, (_, i) => `<i style="background:${colors?.[i] ?? '#000'}"></i>`).join('')}</div>`;
+  return `<div class="leds" aria-hidden="true">${Array.from({ length: n }, (_, i) => `<i style="background:${colors?.[i] ?? 'var(--led-off)'}"></i>`).join('')}</div>`;
 }
 
 function updateLeds(el, colors) {
@@ -152,9 +153,11 @@ function overview(root) {
     <div class="stack" id="ov-banners"></div>
     <section class="panel">
       <div class="panel-head"><h2>Temperatures</h2><span class="meta">Last 2 minutes</span></div>
+      <div class="scale">
+        <div class="ruler" id="ov-ruler" role="img" aria-label="Where each temperature sits between 35 and 85 degrees"></div>
+        <div class="ruler-labels"><span>35°C cool</span><span>60°C</span><span>85°C hot</span></div>
+      </div>
       <div class="thermals" id="ov-thermals"></div>
-      <div class="ruler" id="ov-ruler" role="img" aria-label="Where each temperature sits between 35 and 85 degrees"></div>
-      <div class="ruler-labels"><span>35°C cool</span><span>60°C</span><span>85°C hot</span></div>
     </section>
     <div class="grid-2">
       <section class="panel">
@@ -181,7 +184,7 @@ function overview(root) {
         `${fans.filter((f) => f.profile?.connected !== false).length} fans`,
         `${devices.length} lighting devices`,
         advice ? `${advice} suggestion${advice > 1 ? 's' : ''} waiting` : 'nothing needs attention',
-      ].join(' · ');
+      ].join(', ');
 
       const b = banners(state, { showSimulated: true });
       if (b !== keys.banners) { $('#ov-banners').innerHTML = b; keys.banners = b; }
@@ -194,15 +197,21 @@ function overview(root) {
             <div class="temp"></div>
             <div class="history"></div>
           </div>`).join('');
-        $('#ov-ruler').innerHTML = temps.map((t) => `<span class="tick" data-id="${esc(t.id)}" title="${ROLE_NAME[t.role] ?? esc(t.name)}"></span>`).join('');
+        $('#ov-ruler').innerHTML = temps.map((t) => `<span class="tick" data-id="${esc(t.id)}"><span>${ROLE_SHORT[t.role] ?? esc(t.name)}<b></b></span></span>`).join('');
         keys.temps = tKey;
       }
+      const spot = (t) => Math.min(100, Math.max(0, ((t.value - 35) / 50) * 100));
+      const flip = temps.length > 0 && temps.reduce((sum, t) => sum + spot(t), 0) / temps.length > 60;
+      const order = [...temps].sort((a, b) => (flip ? spot(b) - spot(a) : spot(a) - spot(b)));
       for (const t of temps) {
         const row = root.querySelector(`.thermal-row[data-id="${CSS.escape(t.id)}"]`);
         row.querySelector('.temp').innerHTML = `<span style="color:${thermal(t.value)}">${fmtTemp(t.value)}</span><small>°C</small>`;
         row.querySelector('.history').innerHTML = historyChart(state.history[t.id]);
         const tick = root.querySelector(`.tick[data-id="${CSS.escape(t.id)}"]`);
-        tick.style.left = `${Math.min(100, Math.max(0, ((t.value - 35) / 50) * 100))}%`;
+        tick.style.left = `${spot(t)}%`;
+        tick.style.height = `${32 + 22 * (order.length - 1 - order.indexOf(t))}px`;
+        tick.classList.toggle('flip', flip);
+        tick.querySelector('b').textContent = `${fmtTemp(t.value)}°`;
       }
 
       $('#ov-fans').innerHTML = fans.map((f) => {
@@ -215,13 +224,13 @@ function overview(root) {
         </tr>`;
       }).join('');
 
-      $('#ov-effect').textContent = state.system.rgbConnected ? `${cap(state.lighting.effect)} · Change` : 'Set up';
+      $('#ov-effect').textContent = state.system.rgbConnected ? `${cap(state.lighting.effect)}, change` : 'Set up';
       const lKey = devices.map((d) => d.id + d.included).join() + state.system.rgbConnected + state.system.openRgb;
       if (lKey !== keys.lights) {
         $('#ov-lights').innerHTML = !state.system.rgbConnected
           ? (() => { const s = lightingStatus(state); return `<div class="empty">${icon(s.busy ? 'lighting' : 'plug', 22)}<strong>${esc(s.title)}</strong><span>${esc(s.detail)}</span></div>`; })()
-          : devices.map((d) => `<div class="device ${d.included ? '' : 'off'}" data-id="${esc(d.id)}" style="grid-template-columns:1fr minmax(100px,160px)">
-              <div><strong>${esc(d.name)}</strong><span class="faint">${esc(d.vendor)} · ${esc(d.kind)}${d.included ? '' : ' · left alone'}</span></div>
+          : devices.map((d) => `<div class="device brief ${d.included ? '' : 'off'}" data-id="${esc(d.id)}">
+              <div><strong>${esc(d.name)}</strong><span class="faint">${esc(d.vendor)} ${esc(d.kind.toLowerCase())}${d.included ? '' : ', left alone'}</span></div>
               ${ledStrip(state.preview[d.id], d.ledCount)}</div>`).join('');
         keys.lights = lKey;
       }
@@ -282,7 +291,7 @@ function fansView(root, { param }) {
     const anyControllable = state.fans.some((f) => f.controllable);
     const current = l.modes.find((m) => m.id === l.current);
     el.innerHTML = `
-      <div class="panel-head"><h2>Laptop fan mode</h2><span class="meta">${esc(l.name)}${l.experimental ? ' · <span class="tag warn">Experimental</span>' : ''}</span></div>
+      <div class="panel-head"><h2>Laptop fan mode</h2><span class="meta">${esc(l.name)}${l.experimental ? ' <span class="tag warn">Experimental</span>' : ''}</span></div>
       <div class="panel-body stack" style="gap:12px">
         <div class="segmented" role="group" aria-label="Laptop fan mode" id="fx-mode-set">
           ${l.modes.map((m) => `<button type="button" data-mode="${m.id}" aria-pressed="${m.id === l.current}" title="${esc(m.description)}">${esc(m.label)}</button>`).join('')}
@@ -459,7 +468,7 @@ function fansView(root, { param }) {
     const fan = lastState.fans.find((f) => f.id === selected);
     const live = root.querySelector('#fx-live');
     if (!fan || !live) return;
-    live.textContent = `${fmtRpm(fan.rpm)} rpm · ${fmtPct(fan.percent)}`;
+    live.textContent = `${fmtRpm(fan.rpm)} rpm at ${fmtPct(fan.percent)}`;
     if (curve) {
       const src = lastState.sensors.find((s) => s.id === draft.sourceSensorId);
       curve.setLive(src?.value, fan.percent);
@@ -610,7 +619,7 @@ function lightingView(root) {
           const open = expanded.has(dev.id);
           return `<div class="device-block ${dev.included ? '' : 'off'}" data-id="${esc(dev.id)}">
             <div class="device ${dev.included ? '' : 'off'}" data-id="${esc(dev.id)}">
-              <div><strong>${esc(dev.name)}</strong><span class="faint">${esc(dev.vendor)} · ${esc(dev.kind)} · ${dev.ledCount} LEDs</span></div>
+              <div><strong>${esc(dev.name)}</strong><span class="faint">${esc(dev.vendor)} ${esc(dev.kind.toLowerCase())}, ${dev.ledCount} LEDs</span></div>
               ${ledStrip(state.preview[dev.id], dev.ledCount)}
               <label class="switch" title="${dev.included ? 'Kelvin controls this device' : 'Kelvin leaves this device alone'}">
                 <input type="checkbox" class="include" ${dev.included ? 'checked' : ''} aria-label="Kelvin controls ${esc(dev.name)}"><span></span></label>
@@ -620,7 +629,7 @@ function lightingView(root) {
               ${zones.length > 1 ? `<button type="button" class="btn sm ghost" data-zones aria-expanded="${open}">${open ? 'Hide zones' : `Zones (${zones.length})`}</button>` : ''}
             </div>
             ${open ? `<div class="zone-list">${zones.map((z) => `
-              <div class="zone-row"><span>${esc(z.name)} <span class="faint">· ${z.ledCount} LED${z.ledCount === 1 ? '' : 's'}</span></span>
+              <div class="zone-row"><span>${esc(z.name)} <span class="faint">${z.ledCount} LED${z.ledCount === 1 ? '' : 's'}</span></span>
                 ${colorControls(own?.zones?.[z.name], dev.id, z.name, `${dev.name} ${z.name}`)}</div>`).join('')}</div>` : ''}` : ''}
           </div>`;
         }).join('') || '<div class="empty"><strong>No lighting devices found</strong><span>OpenRGB is running but didn\'t report any devices.</span></div>'}
@@ -849,7 +858,7 @@ function profilesView(root) {
                 ${state.laptop.modes.map((m) => `<option value="${m.id}" ${m.id === p.fanMode ? 'selected' : ''}>${esc(m.label)}</option>`).join('')}
               </select></label>` : '<span></span>'}
             <div class="actions">
-              ${active ? '' : '<button class="btn sm primary" data-act="use">Use now</button>'}
+              ${active ? '' : '<button class="btn sm" data-act="use">Use now</button>'}
               <button class="btn sm ghost" data-act="rename">Rename</button>
               <button class="btn sm ghost" data-act="delete" ${roles.length || state.profiles.length <= 1 ? 'disabled title="Used by automatic switching"' : ''}>Delete</button>
             </div></div>`;
@@ -1169,7 +1178,7 @@ function settingsView(root) {
       const v = alertSensor(state, r.source)?.value;
       const el = row.querySelector('.alert-now');
       el.innerHTML = firing.has(r.id)
-        ? `<span class="tag warn">Above now · ${Math.round(v)}°C</span>`
+        ? `<span class="tag warn">Above now, ${Math.round(v)}°C</span>`
         : v != null ? `now ${Math.round(v)}°C` : 'no sensor';
     });
   }
