@@ -58,8 +58,10 @@ let update = null; // { version, currentVersion, notes } when a newer Kelvin exi
 export const getUpdate = () => update;
 export const canUpdate = () => Boolean(tauriInvoke);
 
+let lastUpdateCheck = 0;
 export async function checkForUpdate(manual = false) {
   if (!tauriInvoke) return null;
+  lastUpdateCheck = Date.now();
   try {
     update = await tauriInvoke('check_for_update');
     if (manual && !update) toast('You have the latest version of Kelvin');
@@ -153,8 +155,12 @@ function handleAlerts(s) {
 }
 
 if (tauriInvoke) {
-  setTimeout(() => checkForUpdate(), 10_000);
+  // At launch, every few hours while running, and when the window is opened again from the tray.
+  checkForUpdate();
   setInterval(() => checkForUpdate(), 6 * 60 * 60 * 1000);
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden && Date.now() - lastUpdateCheck > 30 * 60 * 1000) checkForUpdate();
+  });
 }
 
 function parseHash() {
@@ -272,6 +278,13 @@ if (window.__TAURI__?.event) {
 let lastNavKey = '';
 function onState(next) {
   const first = !state;
+  // Changing a built-in profile makes a custom copy. Say so, or the switch would be a surprise.
+  if (state?.profiles) {
+    const known = new Set(state.profiles.map((p) => p.id));
+    const made = next.profiles?.find((p) => p.basedOn && !known.has(p.id));
+    const from = made && next.profiles.find((p) => p.id === made.basedOn);
+    if (made) toast(`Saved as a new profile, ${made.name}. ${from?.name ?? 'The original'} is unchanged.`);
+  }
   state = next;
   connected = true;
   handleAlerts(state);

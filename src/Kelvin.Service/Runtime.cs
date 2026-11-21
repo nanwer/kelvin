@@ -360,7 +360,7 @@ public sealed class Runtime(
             screenReceiving = lighting.Screen.Receiving(DateTimeOffset.Now),
             conflicts = _conflicts,
             health = _health,
-            profiles = settings.Profiles.Select(p => new { p.Id, p.Name, p.FanMode }),
+            profiles = settings.Profiles.Select(p => new { p.Id, p.Name, p.FanMode, p.BasedOn, builtIn = ProfileEngine.BuiltInIds.Contains(p.Id) }),
             activeProfileId = settings.ActiveProfileId,
             automation = settings.Automation,
             profileStatus = Profiles.Status,

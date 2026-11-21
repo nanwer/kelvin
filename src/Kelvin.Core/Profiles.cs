@@ -11,6 +11,8 @@ public sealed class Profile
     public LightingSettings Lighting { get; set; } = new();
     /// <summary>Laptop fan mode id ("quiet", "balanced", "performance", "max"), or null to leave it alone.</summary>
     public string? FanMode { get; set; }
+    /// <summary>For a profile Kelvin made from someone's changes to a built-in one: that built-in's id.</summary>
+    public string? BasedOn { get; set; }
 }
 
 public sealed class ProfileAutomation
@@ -77,14 +79,45 @@ public sealed class ProfileEngine
             _manualId = manual.Id;
             _manualKey = manual.Key;
         }
-        // Editing fans or lighting saves straight into the active profile.
+        // Editing fans or lighting saves straight into the active profile. The four built-in
+        // profiles are never changed that way: the first edit makes a custom copy and uses it instead.
         store.BeforeSave = s =>
         {
             var active = s.Profiles.FirstOrDefault(p => p.Id == s.ActiveProfileId);
-            if (active is null) return;
+            if (active is null || (Same(active.Fans, s.Fans) && Same(active.Lighting, s.Lighting))) return;
+            if (BuiltInIds.Contains(active.Id)) active = Customise(s, active);
             active.Fans = Copy(s.Fans);
             active.Lighting = Copy(s.Lighting);
         };
+    }
+
+    public static readonly IReadOnlySet<string> BuiltInIds = new HashSet<string> { "quiet", "balanced", "gaming", "night" };
+
+    private static bool Same<T>(T a, T b) =>
+        JsonSerializer.Serialize(a, SettingsStore.Json) == JsonSerializer.Serialize(b, SettingsStore.Json);
+
+    /// <summary>
+    /// Switches from a built-in profile to its custom copy, making the copy if there isn't one yet.
+    /// The copy takes over wherever the built-in was used, so automatic switching keeps working.
+    /// </summary>
+    private Profile Customise(KelvinSettings s, Profile builtIn)
+    {
+        var custom = s.Profiles.FirstOrDefault(p => p.BasedOn == builtIn.Id);
+        if (custom is null)
+        {
+            var name = $"{builtIn.Name} (custom)";
+            for (var n = 2; s.Profiles.Any(p => p.Name == name); n++) name = $"{builtIn.Name} (custom {n})";
+            custom = new Profile { Id = $"custom-{Guid.NewGuid():N}"[..15], Name = name, BasedOn = builtIn.Id };
+            s.Profiles.Insert(s.Profiles.IndexOf(builtIn) + 1, custom);
+        }
+        custom.FanMode = builtIn.FanMode;
+        s.ActiveProfileId = custom.Id;
+        if (s.Automation.DefaultProfileId == builtIn.Id) s.Automation.DefaultProfileId = custom.Id;
+        if (s.Automation.GameProfileId == builtIn.Id) s.Automation.GameProfileId = custom.Id;
+        if (s.Automation.NightProfileId == builtIn.Id) s.Automation.NightProfileId = custom.Id;
+        if (s.ManualProfile?.Id == builtIn.Id) s.ManualProfile = s.ManualProfile with { Id = custom.Id };
+        if (_manualId == builtIn.Id) _manualId = custom.Id;
+        return custom;
     }
 
     /// <summary>Creates Quiet, Balanced, Gaming and Night from the current setup, the first time.</summary>

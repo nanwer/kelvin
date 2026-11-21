@@ -18,7 +18,7 @@ use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem};
 use tauri::Emitter;
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Manager, RunEvent, WindowEvent};
-use tauri_plugin_autostart::MacosLauncher;
+use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
 use tauri_plugin_updater::UpdaterExt;
 
 const SERVICE_ADDR: &str = "127.0.0.1:5577";
@@ -200,6 +200,24 @@ fn update_tray(app: AppHandle, profiles: Vec<TrayProfile>, active: String, autom
     Ok(())
 }
 
+/// Turns on "Start Kelvin with Windows" the first time the installed app runs, so fan curves and
+/// alerts are there after every restart without anyone finding the setting. It does this once:
+/// a marker file records it, so switching the setting off in Settings stays off.
+fn enable_autostart_once(app: &AppHandle) {
+    if cfg!(debug_assertions) {
+        return;
+    }
+    let Ok(dir) = app.path().app_config_dir() else { return };
+    let marker = dir.join("autostart-set");
+    if marker.exists() {
+        return;
+    }
+    if app.autolaunch().enable().is_ok() {
+        let _ = std::fs::create_dir_all(&dir);
+        let _ = std::fs::write(&marker, "Kelvin turned on Start with Windows once. Change it in Settings.\n");
+    }
+}
+
 fn main() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -225,6 +243,7 @@ fn main() {
             }
 
             screen::start();
+            enable_autostart_once(app.handle());
 
             let menu = tray_menu(app.handle(), &[], "", false)?;
 

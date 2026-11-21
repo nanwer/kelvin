@@ -112,12 +112,62 @@ public class ProfileTests
     }
 
     [Fact]
-    public void Editing_fans_saves_into_the_active_profile()
+    public void Editing_a_built_in_profile_makes_a_custom_copy_and_leaves_the_original()
     {
-        _engine.SetManual("gaming");
+        Run(1);
+        Assert.Equal("balanced", Active);
+        var before = _store.Read(s => s.Profiles.Single(p => p.Id == "balanced").Fans[0].MinPercent);
+
         _store.Mutate(s => s.Fans[0].MinPercent = 37);
-        Assert.Equal(37, _store.Read(s => s.Profiles.Single(p => p.Id == "gaming").Fans[0].MinPercent));
-        Assert.NotEqual(37, _store.Read(s => s.Profiles.Single(p => p.Id == "balanced").Fans[0].MinPercent));
+
+        var custom = _store.Read(s => s.Profiles.Single(p => p.BasedOn == "balanced"));
+        Assert.Equal("Balanced (custom)", custom.Name);
+        Assert.Equal(37, custom.Fans[0].MinPercent);
+        Assert.Equal(custom.Id, Active);
+        Assert.Equal(before, _store.Read(s => s.Profiles.Single(p => p.Id == "balanced").Fans[0].MinPercent));
+        // It takes over where Balanced was used, so automatic switching doesn't undo the change.
+        Assert.Equal(custom.Id, _store.Read(s => s.Automation.DefaultProfileId));
+        Run(5);
+        Assert.Equal(custom.Id, Active);
+        Assert.Equal(37, _store.Read(s => s.Fans[0].MinPercent));
+    }
+
+    [Fact]
+    public void Later_edits_go_into_the_same_custom_profile()
+    {
+        Run(1);
+        _store.Mutate(s => s.Fans[0].MinPercent = 37);
+        _store.Mutate(s => s.Lighting.Brightness = 0.33);
+        _store.Mutate(s => s.Fans[0].MinPercent = 41);
+        var customs = _store.Read(s => s.Profiles.Where(p => p.BasedOn is not null).ToList());
+        Assert.Single(customs);
+        Assert.Equal(41, customs[0].Fans[0].MinPercent);
+        Assert.Equal(0.33, customs[0].Lighting.Brightness);
+        Assert.Equal(5, _store.Read(s => s.Profiles.Count));
+    }
+
+    [Fact]
+    public void Editing_a_built_in_again_reuses_its_custom_copy()
+    {
+        Run(1);
+        _store.Mutate(s => s.Fans[0].MinPercent = 37);
+        _engine.SetManual("balanced");                          // back to the untouched original
+        Assert.NotEqual(37, _store.Read(s => s.Fans[0].MinPercent));
+        _store.Mutate(s => s.Fans[0].MinPercent = 44);
+        var custom = _store.Read(s => s.Profiles.Single(p => p.BasedOn == "balanced"));
+        Assert.Equal(44, custom.Fans[0].MinPercent);
+        Assert.Equal(custom.Id, Active);
+        Assert.Equal(ProfileSource.Manual, _engine.Status.Source);
+    }
+
+    [Fact]
+    public void Editing_a_profile_you_made_saves_into_it()
+    {
+        _store.Mutate(s => s.Profiles.Add(new Profile { Id = "mine", Name = "Mine", Fans = ProfileEngine.Copy(s.Fans), Lighting = ProfileEngine.Copy(s.Lighting) }));
+        _engine.SetManual("mine");
+        _store.Mutate(s => s.Fans[0].MinPercent = 37);
+        Assert.Equal(37, _store.Read(s => s.Profiles.Single(p => p.Id == "mine").Fans[0].MinPercent));
+        Assert.DoesNotContain(_store.Read(s => s.Profiles), p => p.BasedOn is not null);
     }
 
     [Fact]
