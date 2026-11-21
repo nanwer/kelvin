@@ -450,6 +450,7 @@ function fansView(root, { param }) {
     if (!st) return;
     st.textContent = dirty ? 'Unsaved changes' : 'Saved';
     root.querySelector('#fx-save').disabled = !dirty;
+    root.querySelector('.editor-foot')?.classList.toggle('dirty', dirty);
     root.querySelector('#fx-revert').disabled = !dirty;
   }
 

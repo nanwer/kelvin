@@ -227,7 +227,8 @@ details summary { cursor: pointer; }
 .segmented button[aria-pressed="true"] { background: color-mix(in oklab, var(--color-light) 13%, transparent); color: var(--text); }
 .segmented button[aria-pressed="true"]::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
 
-.field { display: grid; gap: var(--space-xs); }
+.field { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-xs); min-width: 0; }
+.field > select { width: 100%; text-overflow: ellipsis; }
 .field > label, .field > .label { color: var(--text-2); font-weight: 500; }
 .field .hint { color: var(--text-3); max-width: 70ch; }
 .field-row { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-lg); }
@@ -264,7 +265,14 @@ input[type="range"] { flex: 1; accent-color: var(--accent); height: 24px; }
 .fan-item .rpm { text-align: right; }
 .fan-item .sub { grid-column: 1 / -1; color: var(--text-3); }
 .editor { display: grid; gap: var(--space-lg); }
-.editor-foot { display: flex; justify-content: space-between; align-items: center; gap: var(--space-sm); padding: var(--space-md) var(--space-lg); border-top: 1px solid var(--line); }
+.editor-foot {
+  /* The scrolling area's bottom padding counts as part of the stick offset, so take it back out. */
+  position: sticky; bottom: calc(var(--space-md) - var(--space-2xl)); z-index: var(--z-sticky);
+  display: flex; justify-content: space-between; align-items: center; gap: var(--space-sm);
+  margin: 0 var(--space-sm) var(--space-sm); padding: var(--space-xs) var(--space-xs) var(--space-xs) var(--space-md);
+  border-radius: var(--radius-pill); background: var(--panel-2); box-shadow: var(--glass-hi), var(--shadow-float);
+}
+.editor-foot.dirty .state { color: var(--warn); }
 .editor-foot .state { color: var(--text-3); }
 
 .curve-wrap { position: relative; user-select: none; }
@@ -370,7 +378,8 @@ input[type="range"] { flex: 1; accent-color: var(--accent); height: 24px; }
   .nav a { min-width: 44px; min-height: 44px; justify-content: center; }
   .nav a span.label, .profile-label, .profile-why, .rail-status { display: none; }
   .nav .count { margin-left: 0; }
-  .main { padding: var(--space-lg) var(--space-md) var(--space-xl); }
+  .main { padding: var(--space-lg) var(--space-md) var(--space-xl); overflow: visible; }
+  .editor-foot { bottom: var(--space-md); }
 }
 @media (max-width: 40rem) {
   body { font-size: var(--text-md); }

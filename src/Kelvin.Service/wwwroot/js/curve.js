@@ -94,11 +94,21 @@ export function createCurveEditor(host, { points, onChange }) {
     const lx = x(clamp(live.temp, T_MIN, T_MAX));
     const ly = y(clamp(live.percent ?? 0, 0, 100));
     const label = `${Math.round(live.temp)}°C, ${Math.round(live.percent ?? 0)}%`;
-    const anchorEnd = lx > W - 140;
+    // Put the readout where no curve point sits under it: beside the dot, above or below, either side.
+    const boxW = label.length * 7 + 4, boxH = 14;
+    const spots = [[10, -10], [10, 20], [-10, -10], [-10, 20]].map(([dx, dy]) => {
+      const end = dx < 0;
+      const tx = lx + dx, ty = Math.min(Math.max(ly + dy, T + 12), H - B - 6);
+      const left = end ? tx - boxW : tx;
+      const inside = left >= L && left + boxW <= W - R;
+      const hits = pts.filter((p) => x(p.temp) > left - 12 && x(p.temp) < left + boxW + 12 && y(p.percent) > ty - boxH - 10 && y(p.percent) < ty + 10).length;
+      return { tx, ty, end, score: hits * 2 + (inside ? 0 : 5) };
+    });
+    const spot = spots.reduce((best, s) => (s.score < best.score ? s : best));
     liveG.innerHTML = `
       <line x1="${lx}" x2="${lx}" y1="${T}" y2="${H - B}" stroke-opacity="0.35" stroke-dasharray="3 4"/>
       <circle cx="${lx}" cy="${ly}" r="5"/>
-      <text x="${lx + (anchorEnd ? -10 : 10)}" y="${Math.max(ly - 10, T + 12)}" font-size="12" font-weight="600" text-anchor="${anchorEnd ? 'end' : 'start'}">${label}</text>`;
+      <text x="${spot.tx}" y="${spot.ty}" font-size="12" font-weight="600" text-anchor="${spot.end ? 'end' : 'start'}">${label}</text>`;
   }
 
   function limits(i) {
