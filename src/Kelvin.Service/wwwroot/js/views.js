@@ -513,7 +513,7 @@ function fansView(root, { param }) {
 
 const SWATCHES = ['#ff8a3d', '#ff3b30', '#ff5fa2', '#9b6bff', '#7aa7ff', '#3ddc97', '#ffffff'];
 const EFFECTS = [
-  ['off', 'Off'], ['static', 'Static'], ['breathing', 'Breathing'], ['spectrum', 'Spectrum'], ['temperature', 'Temperature'],
+  ['off', 'Off'], ['static', 'Static'], ['breathing', 'Breathing'], ['spectrum', 'Spectrum'], ['temperature', 'Temperature'], ['screen', 'Screen sync'],
 ];
 
 const COLOR_MODES = [['follow', 'Follow effect'], ['solid', 'Solid color'], ['gradient', 'Gradient'], ['off', 'Off']];
@@ -588,6 +588,14 @@ function lightingView(root) {
           ${d.effect === 'temperature' ? `<div class="field"><label for="lx-sensor">Follows</label>
             <select id="lx-sensor">${sensors.map((s) => `<option value="${esc(s.id)}" ${s.id === d.temperatureSensorId ? 'selected' : ''}>${esc(sensorLabel(s))}</option>`).join('')}</select>
             <span class="hint">Blue when cool, warm white in between, amber then red as it heats up. You can read your temperature from across the room.</span></div>` : ''}
+          ${d.effect === 'screen' ? `<div class="field">
+            <label class="check"><input type="checkbox" id="lx-spread" ${d.screenSpread ? 'checked' : ''}> Spread the screen across each device</label>
+            <span class="hint">${d.screenSpread
+              ? 'Each device shows the screen from left to right along its lights. This suits keyboards and light strips.'
+              : 'Every device shows one color taken from the whole screen.'}</span>
+            <span class="hint">${state.screenReceiving
+              ? 'Kelvin samples your main display about 10 times a second. Only a 16 by 9 grid of colors leaves the app, it stays on this PC, and nothing is saved.'
+              : 'Waiting for the Kelvin app. Screen sync works while the app is running, including in the tray. Until then your lights show your chosen color.'}</span></div>` : ''}
           ${d.effect !== 'off' ? `<div class="field"><label for="lx-bright">Brightness</label>
             <div class="slider"><input type="range" id="lx-bright" min="0" max="100" value="${Math.round(d.brightness * 100)}"><output>${Math.round(d.brightness * 100)}%</output></div></div>` : ''}
           ${animated ? `<div class="field"><label for="lx-speed">Speed</label>
@@ -629,6 +637,7 @@ function lightingView(root) {
     body.querySelector('#lx-custom')?.addEventListener('change', (e) => change((x) => { x.color = e.target.value; }, true));
     body.querySelector('#lx-custom')?.addEventListener('input', (e) => change((x) => { x.color = e.target.value; }));
     body.querySelector('#lx-sensor')?.addEventListener('change', (e) => change((x) => { x.temperatureSensorId = e.target.value; }));
+    body.querySelector('#lx-spread')?.addEventListener('change', (e) => change((x) => { x.screenSpread = e.target.checked; }, true));
     for (const [sel, key] of [['#lx-bright', 'brightness'], ['#lx-speed', 'speed']]) {
       const input = body.querySelector(sel);
       input?.addEventListener('input', () => {
@@ -683,7 +692,7 @@ function lightingView(root) {
       // The server wins unless the user touched something in the last moment.
       const editing = Date.now() < editingUntil;
       if (!draft || (!editing && !same(draft, state.lighting))) draft = clone(state.lighting);
-      const key = JSON.stringify([state.system.rgbConnected, state.system.openRgb, state.devices.map((d) => [d.id, d.included]), draft]);
+      const key = JSON.stringify([state.system.rgbConnected, state.system.openRgb, state.devices.map((d) => [d.id, d.included]), draft, state.screenReceiving]);
       if (!editing && key !== structureKey) { structureKey = key; render(); }
       for (const d of state.devices) updateLeds(root.querySelector(`.device[data-id="${CSS.escape(d.id)}"] .leds`), state.preview[d.id]);
     },

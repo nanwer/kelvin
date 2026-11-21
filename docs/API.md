@@ -38,6 +38,7 @@ from the network.
 | `PUT /api/fans` | one fan's settings (`fanId`, `mode`, `points`, …) |
 | `PUT /api/fan-mode` | `{"id":"performance"}` (laptops) |
 | `PUT /api/lighting` | the `lighting` object |
+| `PUT /api/lighting/screen` | `{ "width", "height", "data" }`: base64 RGB pixels, row by row, at most 64 x 64. Feeds the Screen sync effect, so you can drive it from your own capture tool. |
 | `PUT /api/alerts` | the `alertSettings` object |
 | `PUT /api/safety` | `{"criticalCpuTemp":90,"criticalGpuTemp":95}` |
 | `POST /api/fans/calibrate` | Measure fans (about 30 s) |

@@ -70,6 +70,8 @@ public sealed class Runtime(
 
     public FanEngine Fans => fans;
     public LightingEngine Lighting => lighting;
+    /// <summary>Whether the desktop app should be capturing the screen right now.</summary>
+    public bool ScreenSyncActive => rgbHw.IsConnected && store.Read(s => s.Lighting.Effect) == LightingEffect.Screen;
 
     public Task StartAsync(CancellationToken ct)
     {
@@ -355,6 +357,7 @@ public sealed class Runtime(
             devices = rgbHw.Devices.Select(d => new { d.Id, d.Name, d.Vendor, d.Kind, d.LedCount, d.Zones, included = !excluded.Contains(d.Id) }),
             lighting = settings.Lighting,
             preview = lighting.Preview,
+            screenReceiving = lighting.Screen.Receiving(DateTimeOffset.Now),
             conflicts = _conflicts,
             health = _health,
             profiles = settings.Profiles.Select(p => new { p.Id, p.Name, p.FanMode }),

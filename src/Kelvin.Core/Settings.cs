@@ -27,7 +27,7 @@ public sealed class FanSettings
     };
 }
 
-public enum LightingEffect { Off, Static, Breathing, Spectrum, Temperature }
+public enum LightingEffect { Off, Static, Breathing, Spectrum, Temperature, Screen }
 
 /// <summary>How one device or zone is colored: by the global effect, or on its own.</summary>
 public enum ColorMode { Follow, Solid, Gradient, Off }
@@ -56,6 +56,8 @@ public sealed class LightingSettings
     public double Brightness { get; set; } = 0.8;
     public double Speed { get; set; } = 0.4;
     public string TemperatureSensorId { get; set; } = SensorIds.Hottest;
+    /// <summary>Screen sync: spread the screen left to right along each device, instead of one color.</summary>
+    public bool ScreenSpread { get; set; }
     public List<string> ExcludedDeviceIds { get; set; } = [];
 }
 

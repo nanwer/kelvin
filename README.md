@@ -39,8 +39,9 @@ one app that controls fans and lighting together, and tells you when something e
   than 3 weeks ago. That usually means dust or drying thermal paste."* Temperatures are measured
   against the motherboard sensor, so a hot day doesn't look like dust, and changes you made to fan
   curves aren't mistaken for problems.
-- **Lighting across brands.** One effect for every device: Static, Breathing, Spectrum, or
-  **Temperature**, which shifts your whole PC from blue to red as it heats up. Or give any device,
+- **Lighting across brands.** One effect for every device: Static, Breathing, Spectrum,
+  **Temperature**, which shifts your whole PC from blue to red as it heats up, or **Screen sync**,
+  where your lights follow the colors on screen. Or give any device,
   or any zone inside it (say, just the mouse's scroll wheel), its own solid color or gradient.
   Turn a device off to leave it to another app.
 - **Temperature alerts.** Set your own limits ("CPU above 85°C for 10 seconds") and get a Windows

@@ -26,6 +26,10 @@ public sealed class LightingEngine
     private readonly Dictionary<string, RgbColor[]> _frames = new();
     private readonly object _gate = new();
     private readonly Stopwatch _clock = Stopwatch.StartNew();
+    private double _lastRender;
+
+    /// <summary>Colors from the screen, fed by the desktop app.</summary>
+    public ScreenSync Screen { get; } = new();
 
     public LightingEngine(IRgbProvider rgb, SettingsStore store, Func<IReadOnlyList<SensorReading>> sensors)
     {
@@ -73,6 +77,10 @@ public sealed class LightingEngine
         var t = _clock.Elapsed.TotalSeconds;
         var baseColor = SafeColor(cfg.Color);
         var brightness = Math.Clamp(cfg.Brightness, 0, 1);
+        // Screen sync needs the desktop app running. Without it, show the plain color.
+        var screen = cfg.Effect == LightingEffect.Screen && Screen.Receiving(DateTimeOffset.Now);
+        if (screen) Screen.Step(t - _lastRender);
+        _lastRender = t;
 
         foreach (var device in _rgb.Devices)
         {
@@ -93,6 +101,9 @@ public sealed class LightingEngine
                     LightingEffect.Breathing => baseColor.Scale(brightness * (0.12 + 0.88 * (0.5 - 0.5 * Math.Cos(2 * Math.PI * t * (0.1 + cfg.Speed * 0.5))))),
                     LightingEffect.Spectrum => RgbColor.FromHsv(t * (10 + cfg.Speed * 80) + i * 360.0 / Math.Max(frame.Length, 1) * 0.5, 1, brightness),
                     LightingEffect.Temperature => Thermal(cfg.TemperatureSensorId).Scale(brightness),
+                    LightingEffect.Screen when !screen => baseColor.Scale(brightness),
+                    LightingEffect.Screen => (cfg.ScreenSpread && frame.Length > 1
+                        ? Screen.Across((i + 0.5) / frame.Length) : Screen.Whole()).Scale(brightness),
                     _ => RgbColor.Black,
                 };
             }

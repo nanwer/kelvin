@@ -5,6 +5,8 @@
 // cleanly on quit so every fan goes back to BIOS control.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod screen;
+
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::path::PathBuf;
@@ -221,6 +223,8 @@ fn main() {
                     Err(e) => eprintln!("Couldn't start the Kelvin service: {e}"),
                 }
             }
+
+            screen::start();
 
             let menu = tray_menu(app.handle(), &[], "", false)?;
 

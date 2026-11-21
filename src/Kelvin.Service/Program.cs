@@ -170,6 +170,19 @@ api.MapPut("/lighting", (LightingSettings body, Runtime rt) =>
     return Results.Ok(body);
 });
 
+// Screen sync: the desktop app asks whether it should be capturing, and sends small color grids.
+api.MapGet("/lighting/screen", (Runtime rt) => Results.Ok(new { active = rt.ScreenSyncActive }));
+api.MapPut("/lighting/screen", (ScreenFrame frame, Runtime rt) =>
+{
+    if (!rt.ScreenSyncActive) return Results.Ok(new { active = false });
+    byte[] rgb;
+    try { rgb = Convert.FromBase64String(frame.Data ?? ""); }
+    catch (FormatException) { return Results.BadRequest(new { error = "Data must be base64." }); }
+    return rt.Lighting.Screen.Submit(frame.Width, frame.Height, rgb, DateTimeOffset.Now)
+        ? Results.Ok(new { active = true })
+        : Results.BadRequest(new { error = "Width x height x 3 bytes of RGB, at most 64 x 64." });
+});
+
 api.MapPut("/safety", (SafetySettings body) =>
 {
     body.CriticalCpuTemp = Math.Clamp(body.CriticalCpuTemp, 70, 95);
@@ -341,3 +354,5 @@ static class DesktopOrigins
     public static bool IsAllowed(string origin, int port) =>
         All.Contains(origin) || origin == $"http://127.0.0.1:{port}" || origin == $"http://localhost:{port}";
 }
+
+public sealed record ScreenFrame(int Width, int Height, string? Data);
