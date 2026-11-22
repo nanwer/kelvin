@@ -1,6 +1,6 @@
 [package]
 name = "kelvin-desktop"
-version = "0.7.0"
+version = "0.7.1"
 description = "Kelvin: fans and RGB lighting in one app"
 edition = "2021"
 publish = false

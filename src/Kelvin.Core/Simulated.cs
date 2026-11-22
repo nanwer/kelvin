@@ -121,14 +121,17 @@ public sealed class SimulatedFanProvider : IFanProvider
     public void Dispose() { }
 }
 
-public sealed class SimulatedRgbProvider : IRgbProvider
+/// <param name="laptop">Simulate a gaming laptop: its only lighting is a four-zone keyboard.</param>
+public sealed class SimulatedRgbProvider(bool laptop = false) : IRgbProvider
 {
     public string Name => "Simulated";
     public bool IsSimulated => true;
     public bool IsConnected => true;
     public string? Status => null;
 
-    public IReadOnlyList<RgbDevice> Devices { get; } =
+    public IReadOnlyList<RgbDevice> Devices { get; } = laptop
+    ? [new("sim/rgb/omen-keyboard", "OMEN Keyboard", "HP", "Keyboard", 4, [new("Left", 1), new("Middle", 1), new("Right", 1), new("WASD keys", 1)])]
+    :
     [
         new("sim/rgb/board", "ROG STRIX B550-I GAMING", "ASUS", "Motherboard", 8, [new("Aura mainboard", 8)]),
         new("sim/rgb/ram1", "Vengeance RGB Pro (slot 1)", "Corsair", "Memory", 10, [new("DRAM", 10)]),

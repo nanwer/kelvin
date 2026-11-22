@@ -71,6 +71,9 @@ Free, open source, Windows 10 and 11. No account, and nothing leaves your PC.
   every fan before anything is saved.
 - **The temperature in the tray.** Kelvin's tray icon shows the CPU or graphics card temperature
   as a number, in the color it has everywhere else in the app. The tooltip has the rest.
+- **Laptop keyboards.** The four-zone keyboard on HP Omen laptops is lit through the laptop's own
+  BIOS interface, so it joins every effect like any other device, zone by zone (experimental
+  until confirmed on each model).
 - **Laptops.** Where a laptop runs its own fans, Kelvin switches its fan mode instead: Quiet,
   Balanced, Performance, and Max fan on HP Omen. It uses the HP Omen, ASUS ROG/TUF and Lenovo
   Legion interfaces where they exist (marked experimental until confirmed on each model) and

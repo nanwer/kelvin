@@ -52,7 +52,10 @@ var store = new SettingsStore(settingsPath);
 var thermal = new ThermalHistory(demo ? null : ThermalHistory.PathNextTo(settingsPath));
 if (demo) thermal.SeedDemo();
 IFanProvider fanHw = simulate ? new SimulatedFanProvider(laptopSim) : new LhmFanProvider();
-IRgbProvider rgbHw = simulate ? new SimulatedRgbProvider() : new OpenRgbProvider();
+// Lighting: OpenRGB for most hardware, plus Kelvin's own driver for laptop keyboards it can't reach.
+var openRgbDevices = new OpenRgbProvider();
+IRgbProvider rgbHw = simulate ? new SimulatedRgbProvider(laptopSim) : new CombinedRgbProvider(openRgbDevices,
+    new HpOmenKeyboard(() => openRgbDevices.Devices.Any(d => d.Kind == "Keyboard" && d.Name.Contains("Omen", StringComparison.OrdinalIgnoreCase))));
 var fans = new FanEngine(fanHw, store);
 var restartForDriver = false;
 if (fanHw is LhmFanProvider lhm) lhm.GraphicsDriverReset = () => restartForDriver = true;
