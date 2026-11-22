@@ -9,7 +9,7 @@ use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::time::Duration;
 
-use crate::{addr, SERVICE_ADDR};
+use crate::{addr, SERVICE_ADDR, SERVICE_PORT};
 
 const GRID_W: usize = 16;
 const GRID_H: usize = 9;
@@ -56,6 +56,11 @@ fn is_active(response: &str) -> bool {
 }
 
 fn request(method: &str, body: &str) -> Option<String> {
+    // The screen's colors only ever go to Kelvin's own service, never to whatever else might be
+    // listening on its port while the service is down.
+    if !crate::peer::is_kelvin(SERVICE_PORT, crate::WINDOWS_SERVICE) {
+        return None;
+    }
     let mut stream = TcpStream::connect_timeout(&addr(), Duration::from_millis(300)).ok()?;
     stream.set_read_timeout(Some(Duration::from_secs(1))).ok()?;
     stream.set_write_timeout(Some(Duration::from_secs(1))).ok()?;
@@ -64,8 +69,9 @@ fn request(method: &str, body: &str) -> Option<String> {
         body.len()
     );
     stream.write_all(request.as_bytes()).ok()?;
+    // The reply is a few dozen bytes; never read more than a few kilobytes of it.
     let mut response = String::new();
-    stream.read_to_string(&mut response).ok()?;
+    (&mut stream).take(4096).read_to_string(&mut response).ok()?;
     response.starts_with("HTTP/1.1 200").then_some(response)
 }
 

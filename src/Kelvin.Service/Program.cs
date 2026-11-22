@@ -41,6 +41,12 @@ builder.Services.ConfigureHttpJsonOptions(o =>
 
 var settingsPath = Environment.GetEnvironmentVariable("KELVIN_SETTINGS")
     ?? (asService ? SettingsStore.MachinePath() : SettingsStore.DefaultPath());
+// The service trusts its settings folder, and Windows lets any user create files in a new folder
+// under ProgramData, so it gets permissions of its own before anything is read from it.
+if (asService) MachineFolder.Secure(Path.GetDirectoryName(settingsPath)!);
+// The installed service answers only the person using the PC and administrators (see LocalCaller).
+// KELVIN_ENFORCE_CALLER=1 turns the same check on for a development run.
+var checkCaller = asService || Environment.GetEnvironmentVariable("KELVIN_ENFORCE_CALLER") == "1";
 var store = new SettingsStore(settingsPath);
 // Demo mode never touches real history: it starts from five weeks of made-up data instead.
 var thermal = new ThermalHistory(demo ? null : ThermalHistory.PathNextTo(settingsPath));
@@ -84,6 +90,24 @@ app.Use(async (ctx, next) =>
     {
         ctx.Response.StatusCode = StatusCodes.Status403Forbidden;
         return;
+    }
+    // Loopback is open to every account and program on the PC, so check who is on the other end.
+    // The answer can't change while a connection lives, so it is worked out once per connection.
+    if (checkCaller)
+    {
+        var items = ctx.Features.Get<Microsoft.AspNetCore.Connections.Features.IConnectionItemsFeature>()?.Items;
+        if (items is null || !items.TryGetValue(CallerKey, out var known) || known is not LocalCaller.Verdict verdict)
+        {
+            verdict = LocalCaller.Check(ctx.Connection.RemotePort, Port);
+            if (items is not null) items[CallerKey] = verdict;
+            if (!verdict.Allowed) app.Logger.LogWarning("Refused a request from process {Pid}: {Reason}", verdict.ProcessId, verdict.Reason);
+        }
+        if (!verdict.Allowed)
+        {
+            ctx.Response.StatusCode = StatusCodes.Status403Forbidden;
+            await ctx.Response.WriteAsJsonAsync(new { error = verdict.Reason });
+            return;
+        }
     }
     await next();
 });
@@ -130,11 +154,13 @@ api.MapPut("/fans", (FanSettings body, Runtime rt) =>
     if (!rt.Fans.Fans.Any(f => f.Id == body.FanId && f.Controllable)) return Results.NotFound(new { error = "That fan isn't controllable." });
     try
     {
+        if (!double.IsFinite(body.FixedPercent) || !double.IsFinite(body.MinPercent) || !double.IsFinite(body.SmoothSeconds))
+            return Results.BadRequest(new { error = "Fan speeds and times must be numbers." });
         var clean = body.Clone();
-        clean.FixedPercent = Math.Clamp(clean.FixedPercent, 0, 100);
-        clean.MinPercent = Math.Clamp(clean.MinPercent, 0, 60);
-        clean.SmoothSeconds = Math.Clamp(clean.SmoothSeconds, 0, 120);
-        if (clean.Mode == FanMode.Curve) clean.Points = Curves.Sanitize(clean.Points);
+        clean.Points ??= [];
+        // Says why a curve can't be used; the shared rules below would quietly fall back to BIOS control.
+        if (clean.Mode == FanMode.Curve) clean.Points = Curves.Sanitize(clean.Points.Where(p => p is not null));
+        clean = SettingsRules.Fan(clean);
         store.Mutate(s => { s.Fans.RemoveAll(f => f.FanId == clean.FanId); s.Fans.Add(clean); });
         return Results.Ok(clean);
     }
@@ -162,9 +188,13 @@ api.MapPut("/lighting", (LightingSettings body, Runtime rt) =>
         foreach (var id in body.Devices.Where(d => d.Value.Mode == ColorMode.Follow && d.Value.Zones.Count == 0).Select(d => d.Key).ToList())
             body.Devices.Remove(id);
     }
-    catch (FormatException ex) { return Results.BadRequest(new { error = ex.Message }); }
-    body.Brightness = Math.Clamp(body.Brightness, 0, 1);
-    body.Speed = Math.Clamp(body.Speed, 0, 1);
+    catch (Exception ex) when (ex is FormatException or ArgumentException or NullReferenceException)
+    {
+        return Results.BadRequest(new { error = ex is FormatException ? ex.Message : "Colors must be #rrggbb." });
+    }
+    if (!double.IsFinite(body.Brightness) || !double.IsFinite(body.Speed))
+        return Results.BadRequest(new { error = "Brightness and speed must be numbers between 0 and 1." });
+    body = SettingsRules.Lighting(body);
     store.Mutate(s => s.Lighting = body);
     rt.Lighting.Invalidate();
     return Results.Ok(body);
@@ -185,8 +215,10 @@ api.MapPut("/lighting/screen", (ScreenFrame frame, Runtime rt) =>
 
 api.MapPut("/safety", (SafetySettings body) =>
 {
-    body.CriticalCpuTemp = Math.Clamp(body.CriticalCpuTemp, 70, 95);
-    body.CriticalGpuTemp = Math.Clamp(body.CriticalGpuTemp, 70, 100);
+    // Math.Clamp lets NaN through, and a limit of NaN is never reached: the safety net would be off.
+    if (!double.IsFinite(body.CriticalCpuTemp) || !double.IsFinite(body.CriticalGpuTemp))
+        return Results.BadRequest(new { error = "Safety limits must be temperatures in °C." });
+    body = SettingsRules.Safety(body);
     store.Mutate(s => s.Safety = body);
     return Results.Ok(body);
 });
@@ -290,17 +322,26 @@ api.MapPut("/mqtt", (MqttRequest req) =>
     if (!TopicOk(req.BaseTopic) || !TopicOk(req.DiscoveryPrefix))
         return Results.BadRequest(new { error = "Topics can't be empty or contain spaces, # or +." });
     if (req.Enabled && host.Length == 0) return Results.BadRequest(new { error = "Enter your broker's address." });
+    var username = (req.Username ?? "").Trim();
+    if (username.Length > SettingsRules.MaxNameLength || req.Password is { Length: > 1000 })
+        return Results.BadRequest(new { error = "That user name or password is too long." });
+    var passwordCleared = false;
     store.Mutate(s =>
     {
         var m = s.Mqtt;
+        // The saved password belongs to the broker it was entered for. If the request sends it
+        // somewhere else (another address, another account, or the same one without encryption)
+        // and doesn't supply a password, the saved one is dropped instead of following along.
+        var elsewhere = m.SendsPasswordElsewhere(host, req.Port, req.UseTls, username);
         m.Enabled = req.Enabled; m.Host = host; m.Port = req.Port; m.UseTls = req.UseTls;
-        m.Username = (req.Username ?? "").Trim();
+        m.Username = username;
         m.BaseTopic = req.BaseTopic!.Trim('/'); m.DiscoveryPrefix = req.DiscoveryPrefix!.Trim('/');
         m.AllowProfileControl = req.AllowProfileControl;
         // null keeps the saved password; "" clears it.
         if (req.Password is not null) m.PasswordProtected = HomeAssistantBridge.Protect(req.Password);
+        else if (elsewhere && m.PasswordProtected.Length > 0) { m.PasswordProtected = ""; passwordCleared = true; }
     });
-    return Results.Ok();
+    return Results.Ok(new { passwordCleared });
 });
 
 // ---- Laptop fan modes (the choice is saved into the active profile)
@@ -322,17 +363,22 @@ api.MapPost("/conflicts/close", (RecommendationRequest req, Runtime rt) =>
 api.MapPost("/recommendations/apply-all", (Runtime rt) => Results.Ok(new { applied = rt.ApplyAll() }));
 api.MapPost("/recommendations/dismiss", (RecommendationRequest req) =>
 {
+    if (req.Id is not { Length: > 0 and <= 100 }) return Results.BadRequest(new { error = "Unknown suggestion." });
     store.Mutate(s => { if (!s.DismissedRecommendations.Contains(req.Id)) s.DismissedRecommendations.Add(req.Id); });
     return Results.Ok();
 });
 
-// Lets the desktop app quit the service gracefully, which runs the shutdown path that hands
-// every fan back to the BIOS.
-api.MapPost("/shutdown", (IHostApplicationLifetime life) =>
+// Lets the desktop app quit a service it started itself (a portable copy, or development), which
+// runs the shutdown path that hands every fan back to the BIOS. The installed Windows service
+// doesn't offer this: Windows decides who may stop a service, and that is administrators only.
+if (!asService)
 {
-    life.StopApplication();
-    return Results.Accepted();
-});
+    api.MapPost("/shutdown", (IHostApplicationLifetime life) =>
+    {
+        life.StopApplication();
+        return Results.Accepted();
+    });
+}
 
 // Last line of defence: if the process dies unexpectedly, hand fans back to the BIOS.
 AppDomain.CurrentDomain.ProcessExit += (_, _) => fans.RestoreAll();
@@ -345,6 +391,11 @@ record RecommendationRequest(string Id);
 record ProfileRequest(string? Name, string? FanMode);
 record MqttRequest(bool Enabled, string? Host, int Port, bool UseTls, string? Username, string? Password,
     string? BaseTopic, string? DiscoveryPrefix, bool AllowProfileControl);
+
+static partial class Program
+{
+    internal static readonly object CallerKey = new();
+}
 
 static class DesktopOrigins
 {

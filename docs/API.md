@@ -11,6 +11,10 @@ from the network.
 - `GET` requests need nothing special.
 - Every request that changes something (`PUT`, `POST`, `DELETE`) needs the header **`X-Kelvin: 1`**.
   Browsers can't add that header across sites, so a web page can't change your fans or profiles.
+- **Who can call it.** The installed service answers the person using the PC (at the screen or
+  over Remote Desktop) and programs running as administrator. It refuses programs run by another
+  account and restricted (low-integrity) programs with `403`. Scripts you run yourself work as
+  before.
 - Bodies are JSON. Names are camelCase.
 
 ### Reading
@@ -84,7 +88,9 @@ Kelvin then appears in Home Assistant as a device called **Kelvin (your PC's nam
 
 Only those two commands exist. Kelvin never accepts fan speeds over MQTT, and you can turn off
 profile switching from Home Assistant in Settings. The broker password is stored encrypted with
-Windows DPAPI and is never shown again in the app.
+Windows DPAPI and is never shown again in the app. It is only ever sent to the broker it was
+entered for: change the address, port or user name (or turn TLS off) without typing the password
+again, and Kelvin forgets it.
 
 ### Example automation
 

@@ -226,7 +226,7 @@ public sealed class Runtime(
         {
             using (p)
             {
-                if (!app.Processes.Contains(p.ProcessName, StringComparer.OrdinalIgnoreCase)) continue;
+                if (!ConflictDetector.Matches(app, p)) continue;
                 try
                 {
                     p.Kill(entireProcessTree: true);

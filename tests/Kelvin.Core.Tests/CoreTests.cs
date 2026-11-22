@@ -164,6 +164,18 @@ public class FanEngineTests
     }
 
     [Fact]
+    public void A_limit_that_is_not_a_number_cannot_switch_the_safety_override_off()
+    {
+        var (hw, engine, store) = Setup();
+        // "NaN" used to pass the range check, and no temperature is ever >= NaN.
+        store.Mutate(s => s.Safety = new SafetySettings { CriticalCpuTemp = double.NaN, CriticalGpuTemp = double.NaN });
+        hw.CpuTemp = 96;
+        Tick(engine);
+        Assert.True(engine.Safety.Override);
+        Assert.Equal(100, hw.Duty["fan"]);
+    }
+
+    [Fact]
     public void Override_message_counts_the_fans_it_controls()
     {
         var (hw, engine, _) = Setup();

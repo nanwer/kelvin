@@ -15,6 +15,10 @@
 ;   - if the install fails or is cancelled anyway, the service that was stopped is started again;
 ;   - signed-in users may start (never stop or change) the service, so the app can bring it back.
 ;
+;   - an install outside Program Files gets permissions of its own. A folder such as C:\Kelvin
+;     inherits its parent's, which often let any signed-in user change files in it, and the service
+;     that runs from there has system rights.
+;
 ; Every nsExec call pushes its exit code; each one is popped so nothing is left on the stack for
 ; Tauri's own installer logic. Registers used here are saved and restored.
 
@@ -123,7 +127,43 @@
   Pop $R8
 !macroend
 
+; Outside Program Files nothing guarantees that only administrators can change the install folder.
+; Give it the permissions Program Files would have given it: the system and administrators have
+; full control, everyone else can read and run. Program Files installs are left exactly as Windows
+; set them up.
+!macro KELVIN_LOCK_FOLDER
+  Push $R7
+  Push $R8
+  Push $R9
+  StrLen $R9 "$PROGRAMFILES64\"
+  StrCpy $R8 "$INSTDIR\" $R9
+  StrCmp $R8 "$PROGRAMFILES64\" kelvin_lock_done
+  StrLen $R9 "$PROGRAMFILES32\"
+  StrCpy $R8 "$INSTDIR\" $R9
+  StrCmp $R8 "$PROGRAMFILES32\" kelvin_lock_done
+  CreateDirectory "$INSTDIR"
+  ; Owner first (an owner can always rewrite permissions), then drop everything the folder has
+  ; or inherits and grant only what's wanted. *S-1-5-18 is the system, -544 administrators, -545 users.
+  nsExec::ExecToLog '"$SYSDIR\icacls.exe" "$INSTDIR" /setowner *S-1-5-32-544 /C /Q'
+  Pop $R7
+  nsExec::ExecToLog '"$SYSDIR\icacls.exe" "$INSTDIR" /reset /C /Q'
+  Pop $R7
+  nsExec::ExecToLog '"$SYSDIR\icacls.exe" "$INSTDIR" /inheritance:r /grant:r *S-1-5-18:(OI)(CI)F *S-1-5-32-544:(OI)(CI)F *S-1-5-32-545:(OI)(CI)RX /C /Q'
+  Pop $R7
+  ; Whatever is already inside (an earlier install, or files someone put there) takes the folder's
+  ; permissions and ownership too.
+  nsExec::ExecToLog '"$SYSDIR\icacls.exe" "$INSTDIR\*" /setowner *S-1-5-32-544 /T /C /Q'
+  Pop $R7
+  nsExec::ExecToLog '"$SYSDIR\icacls.exe" "$INSTDIR\*" /reset /T /C /Q'
+  Pop $R7
+  kelvin_lock_done:
+  Pop $R9
+  Pop $R8
+  Pop $R7
+!macroend
+
 !macro NSIS_HOOK_PREINSTALL
+  !insertmacro KELVIN_LOCK_FOLDER
   !insertmacro KELVIN_FREE_FILES
   !insertmacro KELVIN_SET_ASIDE "kelvin.exe" app
   !insertmacro KELVIN_SET_ASIDE "service\Kelvin.Service.exe" service

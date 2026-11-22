@@ -308,10 +308,7 @@ public sealed class ThermalHistory
         if (_path is null) return;
         try
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(_path)!);
-            var tmp = _path + ".tmp";
-            File.WriteAllText(tmp, JsonSerializer.Serialize(_days, Json));
-            File.Move(tmp, _path, overwrite: true);
+            SafeFile.Replace(_path, JsonSerializer.Serialize(_days, Json));
         }
         catch { /* a failed save just loses a few minutes of history */ }
     }

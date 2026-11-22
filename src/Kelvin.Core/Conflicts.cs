@@ -68,21 +68,39 @@ public static class ConflictDetector
 
     public static ConflictApp? Find(string key) => Apps.FirstOrDefault(a => a.Key == key);
 
+    /// <summary>
+    /// Process names too short to mean one program. "GCC" is Gigabyte Control Center and also the
+    /// GNU compiler, so it only counts when the program runs from a folder with this in its path.
+    /// </summary>
+    private static readonly Dictionary<string, string> NeedsFolder = new(StringComparer.OrdinalIgnoreCase) { ["GCC"] = "GIGABYTE" };
+
+    /// <summary>Whether a running process is one of this app's, by name and, where the name is ambiguous, by where it runs from.</summary>
+    public static bool Matches(ConflictApp app, Process process)
+    {
+        string name;
+        try { name = process.ProcessName; }
+        catch { return false; }
+        if (!app.Processes.Contains(name, StringComparer.OrdinalIgnoreCase)) return false;
+        if (!NeedsFolder.TryGetValue(name, out var folder)) return true;
+        try { return process.MainModule?.FileName.Contains(folder, StringComparison.OrdinalIgnoreCase) == true; }
+        catch { return false; } // can't see where it runs from: don't guess
+    }
+
     public static IReadOnlyList<Conflict> Detect()
     {
-        HashSet<string> running;
+        Process[] running;
+        try { running = Process.GetProcesses(); }
+        catch { return []; }
         try
         {
-            running = Process.GetProcesses().Select(p => p.ProcessName).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            return Apps
+                .Where(a => running.Any(p => Matches(a, p)))
+                .Select(a => new Conflict(a.Key, a.Name, a.Area, a.Impact, a.Fix, a.CanClose))
+                .ToList();
         }
-        catch
+        finally
         {
-            return [];
+            foreach (var p in running) p.Dispose();
         }
-
-        return Apps
-            .Where(a => a.Processes.Any(running.Contains))
-            .Select(a => new Conflict(a.Key, a.Name, a.Area, a.Impact, a.Fix, a.CanClose))
-            .ToList();
     }
 }

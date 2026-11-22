@@ -143,12 +143,19 @@ public sealed class SettingsStore
         try
         {
             if (File.Exists(_path))
-                return JsonSerializer.Deserialize<KelvinSettings>(File.ReadAllText(_path), Json) ?? new();
+            {
+                var loaded = JsonSerializer.Deserialize<KelvinSettings>(File.ReadAllText(_path), Json) ?? new();
+                // The file gets the same limits as the API: whatever wrote it, a value the API
+                // would refuse (a safety limit out of range, a broken list) never takes effect.
+                SettingsRules.Normalize(loaded);
+                return loaded;
+            }
         }
         catch (Exception)
         {
             // A corrupt file must never stop the app. Keep it aside for bug reports and start clean.
-            File.Copy(_path, _path + ".corrupt", overwrite: true);
+            try { File.Copy(_path, _path + ".corrupt", overwrite: true); }
+            catch (Exception) { /* keeping a copy is a courtesy; starting is what matters */ }
         }
         return new();
     }
@@ -161,11 +168,12 @@ public sealed class SettingsStore
         lock (_gate)
         {
             change(Current);
+            // Every change is brought inside the rules before anything reads or saves it, so a
+            // value that slipped past a route (NaN, a null list) can neither take effect nor
+            // make the save fail and leave memory and disk out of step.
+            SettingsRules.Normalize(Current);
             BeforeSave?.Invoke(Current);
-            Directory.CreateDirectory(Path.GetDirectoryName(_path)!);
-            var tmp = _path + ".tmp";
-            File.WriteAllText(tmp, JsonSerializer.Serialize(Current, Json));
-            File.Move(tmp, _path, overwrite: true);
+            SafeFile.Replace(_path, JsonSerializer.Serialize(Current, Json));
         }
     }
 

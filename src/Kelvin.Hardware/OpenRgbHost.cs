@@ -157,31 +157,22 @@ public sealed class OpenRgbHost(int port = 6742) : IDisposable
     public static string BundledPath { get; } =
         Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "openrgb", "OpenRGB.exe"));
 
-    /// <summary>Looks in the usual install folders, including per-user installs for any user.</summary>
+    /// <summary>Looks in Kelvin's own folder first, then the system-wide OpenRGB install folders.</summary>
     public static string? FindExecutable()
     {
         var env = Environment.GetEnvironmentVariable("KELVIN_OPENRGB");
         if (!string.IsNullOrEmpty(env) && File.Exists(env)) return env;
 
-        var candidates = new List<string>
-        {
+        // Only folders that take an administrator to write to. Kelvin starts this program with
+        // system rights, so it never looks in a user's own profile, where anyone could put a
+        // file called OpenRGB.exe.
+        string[] candidates =
+        [
             BundledPath,
             // Otherwise a separate OpenRGB install.
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "OpenRGB", "OpenRGB.exe"),
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "OpenRGB", "OpenRGB.exe"),
-        };
-        try
-        {
-            // The service runs as LocalSystem, so per-user installs live under other profiles.
-            var users = Path.Combine(Path.GetPathRoot(Environment.SystemDirectory)!, "Users");
-            foreach (var profile in Directory.EnumerateDirectories(users))
-            {
-                candidates.Add(Path.Combine(profile, "AppData", "Local", "Programs", "OpenRGB", "OpenRGB.exe"));
-                candidates.Add(Path.Combine(profile, "AppData", "Local", "OpenRGB", "OpenRGB.exe"));
-            }
-        }
-        catch { /* profiles folder unreadable: skip */ }
-
+        ];
         return candidates.FirstOrDefault(File.Exists);
     }
 

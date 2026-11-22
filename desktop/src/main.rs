@@ -5,6 +5,7 @@
 // cleanly on quit so every fan goes back to BIOS control.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod peer;
 mod screen;
 
 use std::io::{Read, Write};
@@ -23,6 +24,7 @@ use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
 use tauri_plugin_updater::UpdaterExt;
 
 const SERVICE_ADDR: &str = "127.0.0.1:5577";
+const SERVICE_PORT: u16 = 5577;
 const MINIMIZED_FLAG: &str = "--minimized";
 const WINDOWS_SERVICE: &str = "KelvinService";
 
@@ -129,8 +131,10 @@ fn addr() -> SocketAddr {
     SERVICE_ADDR.parse().expect("valid socket address")
 }
 
+/// True when Kelvin's service is answering. Something else listening on the port doesn't count:
+/// any program could squat there while the real service is down (see peer.rs).
 fn service_running() -> bool {
-    TcpStream::connect_timeout(&addr(), Duration::from_millis(300)).is_ok()
+    TcpStream::connect_timeout(&addr(), Duration::from_millis(300)).is_ok() && peer::is_kelvin(SERVICE_PORT, WINDOWS_SERVICE)
 }
 
 fn spawn_service() -> std::io::Result<Child> {
@@ -312,7 +316,10 @@ fn main() {
             let installed = !cfg!(debug_assertions) && windows_service_installed();
             if !installed && !service_running() {
                 match spawn_service() {
-                    Ok(child) => *app.state::<Service>().0.lock().unwrap() = Some(child),
+                    Ok(child) => {
+                        peer::CHILD_PID.store(child.id(), std::sync::atomic::Ordering::Relaxed);
+                        *app.state::<Service>().0.lock().unwrap() = Some(child);
+                    }
                     Err(e) => eprintln!("Couldn't start the Kelvin service: {e}"),
                 }
             }

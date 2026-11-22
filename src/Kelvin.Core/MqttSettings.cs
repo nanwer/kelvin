@@ -16,4 +16,13 @@ public sealed class MqttSettings
     public string DiscoveryPrefix { get; set; } = "homeassistant";
     /// <summary>Let Home Assistant switch profiles. Kelvin never takes direct fan-speed commands over MQTT.</summary>
     public bool AllowProfileControl { get; set; } = true;
+
+    /// <summary>
+    /// Whether these connection details would send the saved password somewhere it wasn't entered
+    /// for: another address or port, another account, or the same broker without encryption.
+    /// The password belongs to one broker, so a change like that must come with a new password.
+    /// </summary>
+    public bool SendsPasswordElsewhere(string host, int port, bool useTls, string username) =>
+        !string.Equals(Host, host, StringComparison.OrdinalIgnoreCase) || Port != port
+        || (UseTls && !useTls) || !string.Equals(Username, username, StringComparison.Ordinal);
 }

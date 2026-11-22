@@ -1,6 +1,6 @@
 [package]
 name = "kelvin-desktop"
-version = "0.6.2"
+version = "0.6.3"
 description = "Kelvin: fans and RGB lighting in one app"
 edition = "2021"
 publish = false
@@ -23,7 +23,7 @@ tauri-plugin-single-instance = "2"
 tauri-plugin-updater = "2.14.1"
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_UI_WindowsAndMessaging"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_UI_WindowsAndMessaging", "Win32_NetworkManagement_IpHelper", "Win32_Networking_WinSock", "Win32_Security", "Win32_System_Services", "Win32_System_Threading"] }
 
 [profile.release]
 codegen-units = 1

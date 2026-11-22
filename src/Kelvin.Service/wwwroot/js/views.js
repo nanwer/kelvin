@@ -1121,7 +1121,7 @@ function settingsView(root) {
   const $h = (s) => root.querySelector(s);
   $h('#ha-save').addEventListener('click', () => run(async () => {
     const pass = $h('#ha-pass').value;
-    await api('PUT', '/mqtt', {
+    const saved = await api('PUT', '/mqtt', {
       enabled: $h('#ha-enabled').checked,
       host: $h('#ha-host').value, port: Number($h('#ha-port').value),
       useTls: $h('#ha-tls').checked,
@@ -1131,7 +1131,11 @@ function settingsView(root) {
       allowProfileControl: $h('#ha-control').checked,
     });
     $h('#ha-pass').value = '';
-  }, 'Home Assistant settings saved'));
+    // The saved password only ever goes to the broker it was entered for.
+    toast(saved?.passwordCleared
+      ? 'Saved. The broker details changed, so the saved password was removed. Enter it again.'
+      : 'Home Assistant settings saved', Boolean(saved?.passwordCleared));
+  }));
 
   function updateHa(state) {
     const m = state.mqtt;
@@ -1142,7 +1146,7 @@ function settingsView(root) {
       $h('#ha-base').value = m.baseTopic; $h('#ha-disc').value = m.discoveryPrefix;
       haLoaded = true;
     }
-    $h('#ha-pass-hint').textContent = m.hasPassword ? 'A password is saved. Leave this empty to keep it.' : '';
+    $h('#ha-pass-hint').textContent = m.hasPassword ? 'A password is saved. Leave this empty to keep it. Changing the address, port or user name removes it.' : '';
     $h('#ha-status').innerHTML = m.connected
       ? `<span class="tag ok">Connected</span>`
       : m.enabled ? `<span class="tag warn">${esc(m.status)}</span>` : '<span class="faint">Off</span>';

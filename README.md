@@ -110,6 +110,8 @@ Fan control can damage hardware if it goes wrong, so Kelvin fails safe.
 - **Graphics card fans are left alone** unless you set them up yourself.
 - **Websites can't reach it.** The service listens on this PC only and rejects requests that come
   from a web page.
+- **Other accounts can't drive it.** The service answers the person using the PC and
+  administrators. A program run by another account, or a sandboxed one, is refused.
 - **On laptops it doesn't pretend.** Where Kelvin can't control any fans, it says so.
 
 ## Privacy
