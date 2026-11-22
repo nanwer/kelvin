@@ -58,8 +58,14 @@ jobs:
           workspaces: desktop -> target
           cache-all-crates: true
 
+      # The Tauri CLI as the prebuilt binary from its own GitHub release. Compiling it from source
+      # took six minutes of every release. If no prebuilt binary matches, binstall compiles it.
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-binstall
+
       - name: Install Tauri CLI
-        run: cargo install tauri-cli --version "^2" --locked
+        run: cargo binstall tauri-cli --version "^2" --no-confirm --locked
 
       - name: Run tests
         run: dotnet test
