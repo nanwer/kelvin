@@ -154,3 +154,36 @@ public class SettingsRulesTests
         Assert.False(LocalCaller.Check(1, servicePort).Allowed);
     }
 }
+
+/// <summary>A graphics driver update must not be able to crash the service (see AmdGpuGuard).</summary>
+public class AmdGpuGuardTests
+{
+    [System.Runtime.InteropServices.DllImport("kernel32.dll")]
+    private static extern IntPtr VirtualAlloc(IntPtr address, nuint size, uint type, uint protect);
+
+    [System.Runtime.InteropServices.DllImport("kernel32.dll")]
+    private static extern bool VirtualFree(IntPtr address, nuint size, uint type);
+
+    [Fact]
+    public void The_sensor_library_still_has_the_fields_the_guard_reads()
+    {
+        // If this fails after updating LibreHardwareMonitorLib, the guard has silently switched
+        // itself off: find the new names of the shared-memory fields in its AmdGpu class.
+        Assert.True(AmdGpuGuard.Available);
+    }
+
+    [Fact]
+    public void Memory_that_has_gone_away_is_reported_as_unreadable()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        const int size = 3 * 4096;
+        var memory = VirtualAlloc(IntPtr.Zero, size, 0x3000 /* commit and reserve */, 0x04 /* read-write */);
+        Assert.NotEqual(IntPtr.Zero, memory);
+        Assert.True(AmdGpuGuard.Readable(memory, size));
+        Assert.False(AmdGpuGuard.Readable(memory, size + 1 << 20));   // runs past the end of the block
+
+        VirtualFree(memory, 0, 0x8000 /* release */);
+        Assert.False(AmdGpuGuard.Readable(memory, size));            // what a driver reset leaves behind
+        Assert.False(AmdGpuGuard.Readable(IntPtr.Zero, 16));
+    }
+}

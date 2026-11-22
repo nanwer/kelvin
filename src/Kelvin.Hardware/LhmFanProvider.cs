@@ -19,6 +19,24 @@ public sealed class LhmFanProvider : IFanProvider
 
     private readonly Dictionary<string, ISensor> _controls = new();
 
+    // A graphics driver update takes away memory the library reads AMD sensors from (see AmdGpuGuard).
+    private static readonly TimeSpan SettleTime = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan RescanEvery = TimeSpan.FromSeconds(30), RescanFor = TimeSpan.FromMinutes(5);
+    private readonly DateTime _started = DateTime.UtcNow;
+    private readonly DateTime? _testResetAt = Environment.GetEnvironmentVariable("KELVIN_TEST_DRIVER_RESET") == "1" ? DateTime.UtcNow.AddSeconds(30) : null;
+    private DateTime? _driverGoneAt;
+    private DateTime _lastRescan = DateTime.UtcNow;
+    private bool _resetReported;
+
+    /// <summary>
+    /// Called once, a few seconds after the graphics driver was found to have reset. The card's
+    /// sensors can't be read again by this process, so the owner should restart it cleanly.
+    /// </summary>
+    public Action? GraphicsDriverReset { get; set; }
+
+    /// <summary>True from the moment a graphics driver reset is noticed. The card's sensors are missing until a restart.</summary>
+    public bool GraphicsDriverGone => _driverGoneAt is not null;
+
     public string Name => "LibreHardwareMonitor";
     public bool IsSimulated => false;
     public IReadOnlyList<FanReading> Fans { get; private set; } = [];
@@ -44,6 +62,16 @@ public sealed class LhmFanProvider : IFanProvider
 
         foreach (var hw in _computer.Hardware)
         {
+            // Reading an AMD card after its driver was updated or reset would crash the process,
+            // and nothing can catch that. Leave the card out instead; its sensors go missing, and
+            // any fan that follows them is handed back to the BIOS until Kelvin has restarted.
+            if (_driverGoneAt is not null && hw.HardwareType == HardwareType.GpuAmd) continue;
+            if (!AmdGpuGuard.SafeToUpdate(hw) || (_testResetAt <= DateTime.UtcNow && hw.HardwareType == HardwareType.GpuAmd))
+            {
+                _driverGoneAt = DateTime.UtcNow;
+                continue;
+            }
+
             hw.Update();
             foreach (var sub in hw.SubHardware) sub.Update();
 
@@ -89,6 +117,33 @@ public sealed class LhmFanProvider : IFanProvider
 
         Fans = fans;
         Sensors = SensorList.NormalizePrimary(sensors);
+
+        // Give the new driver a moment to finish installing, then ask for the restart, once.
+        if (_driverGoneAt is { } gone && !_resetReported && DateTime.UtcNow - gone >= SettleTime)
+        {
+            _resetReported = true;
+            GraphicsDriverReset?.Invoke();
+        }
+        RescanForGraphicsCard();
+    }
+
+    /// <summary>
+    /// The library looks for graphics cards once, when it opens. Right after a driver update (or a
+    /// restart that follows one) the card may not be ready yet, so for the first few minutes, as
+    /// long as no card has been found, look again every half minute.
+    /// </summary>
+    private void RescanForGraphicsCard()
+    {
+        var now = DateTime.UtcNow;
+        if (_driverGoneAt is not null || now - _started > RescanFor || now - _lastRescan < RescanEvery) return;
+        _lastRescan = now;
+        if (_computer.Hardware.Any(h => h.HardwareType is HardwareType.GpuAmd or HardwareType.GpuNvidia or HardwareType.GpuIntel)) return;
+        try
+        {
+            _computer.IsGpuEnabled = false;
+            _computer.IsGpuEnabled = true;
+        }
+        catch (Exception) { /* looking again is a bonus; never let it stop the fan loop */ }
     }
 
     private static bool IsPrimary(SensorRole role, ISensor s) => role switch

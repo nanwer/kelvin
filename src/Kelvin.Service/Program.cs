@@ -54,6 +54,8 @@ if (demo) thermal.SeedDemo();
 IFanProvider fanHw = simulate ? new SimulatedFanProvider(laptopSim) : new LhmFanProvider();
 IRgbProvider rgbHw = simulate ? new SimulatedRgbProvider() : new OpenRgbProvider();
 var fans = new FanEngine(fanHw, store);
+var restartForDriver = false;
+if (fanHw is LhmFanProvider lhm) lhm.GraphicsDriverReset = () => restartForDriver = true;
 var lighting = new LightingEngine(rgbHw, store, () => fans.Sensors);
 // With real hardware, Kelvin runs OpenRGB itself so lighting works without the user opening it.
 var openRgbHost = simulate ? null : new OpenRgbHost();
@@ -379,6 +381,22 @@ if (!asService)
         return Results.Accepted();
     });
 }
+
+// A graphics driver update or reset leaves this process unable to read the card's sensors again
+// (see AmdGpuGuard). Only a fresh process can, so the installed service hands every fan back to the
+// BIOS and ends itself without reporting a clean stop; Windows then starts it again within seconds,
+// the same way it recovers from a crash, but without one. Ending the process outright also skips
+// the library's own shutdown calls into a driver that is no longer there.
+_ = Task.Run(async () =>
+{
+    while (!restartForDriver) await Task.Delay(1000);
+    app.Logger.LogWarning("The graphics driver was updated or reset, so the graphics card's sensors can't be read any more. {What}",
+        asService ? "Kelvin is restarting its service to pick the new driver up; fans are on BIOS control for a few seconds." : "Restart Kelvin to get them back.");
+    if (!asService) return;
+    fans.RestoreAll();
+    await Task.Delay(500); // let the log entry out
+    System.Diagnostics.Process.GetCurrentProcess().Kill();
+});
 
 // Last line of defence: if the process dies unexpectedly, hand fans back to the BIOS.
 AppDomain.CurrentDomain.ProcessExit += (_, _) => fans.RestoreAll();
