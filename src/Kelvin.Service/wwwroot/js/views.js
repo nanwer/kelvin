@@ -31,7 +31,7 @@ function banners(state, { showSimulated = false } = {}) {
     const now = alertSensor(state, rule.source)?.value;
     out.push(`<div class="banner warn" role="status">${icon('alert')}<div class="grow"><strong>${esc(SOURCE_NAME[rule.source])} is above your ${Math.round(rule.threshold)}°C alert</strong>
       <p>${now != null ? `Now ${Math.round(now)}°C. ` : ''}Kelvin notified you when it crossed the limit. This clears once it's ${Math.round(rule.threshold - 3)}°C or cooler.</p></div>
-      <a class="btn sm" href="#/settings">Alerts</a></div>`);
+      <a class="btn sm" href="#/settings/alerts">Alerts</a></div>`);
   }
   if (state.system.fanDriverInstalled === false) {
     out.push(`<div class="banner warn">${icon('alert')}<div class="grow"><strong>Motherboard fans need the PawnIO driver</strong>
@@ -1059,10 +1059,13 @@ function adviceView(root) {
 
 // ---------------------------------------------------------------- Settings
 
+let lastSettingsTab = null;   // reopening Settings returns to the tab you were on
+
 function settingsView(root, { param } = {}) {
   root.innerHTML = `<div class="page">
-    <header class="page-head"><div><h1>Settings</h1></div></header>
-    <section class="panel">
+    <header class="page-head"><div><h1>Settings</h1><p id="st-tab-about"></p></div></header>
+    <div class="segmented settings-tabs" role="group" aria-label="Settings sections" id="st-tabs"></div>
+    <section class="panel" id="safety">
       <div class="panel-head"><h2>Safety</h2></div>
       <div class="panel-body stack">
         <p class="muted">If a temperature reaches these limits, every fan goes to full speed until it cools down, whatever its curve says.</p>
@@ -1159,11 +1162,11 @@ function settingsView(root, { param } = {}) {
         <div class="actions"><button class="btn sm" id="st-check">Check now</button><button class="btn sm primary" id="st-install" hidden>Update now</button></div>
       </div>
     </section>
-    <section class="panel">
+    <section class="panel" id="hardware">
       <div class="panel-head"><h2>Hardware</h2></div>
       <table><tbody id="st-hw"></tbody></table>
     </section>
-    <section class="panel">
+    <section class="panel" id="report">
       <div class="panel-head"><h2>Help support more hardware</h2></div>
       <div class="panel-body stack">
         <p class="muted" style="max-width:72ch">Kelvin learns about new boards and devices from the people who use them. Sharing what Kelvin found on your PC helps everyone with the same hardware. You'll see exactly what's included before anything is sent.</p>
@@ -1399,8 +1402,28 @@ function settingsView(root, { param } = {}) {
     criticalGpuTemp: Number(root.querySelector('#st-gpu').value),
   }), 'Safety limits saved'));
 
-  // A link such as #/settings/import opens the page at that section.
-  const jump = (id) => { if (id) requestAnimationFrame(() => root.querySelector(`#${CSS.escape(id)}`)?.scrollIntoView({ block: 'start' })); };
+  // ---- Tabs: one group of settings at a time, so the page isn't one long scroll.
+  // A link names a tab (#/settings/app) or a section inside one (#/settings/import).
+  const TABS = [
+    { id: 'protect', label: 'Safety and alerts', about: 'What Kelvin does when things get hot, and when it tells you.', sections: ['safety', 'alerts'] },
+    { id: 'app', label: 'App', about: 'How the Kelvin app behaves on this PC.', sections: ['st-app', 'st-updates'] },
+    { id: 'connect', label: 'Connections', about: 'Bring settings in from FanControl, or share readings with your smart home.', sections: ['import', 'ha'] },
+    { id: 'hardware', label: 'Hardware', about: 'What Kelvin found in this PC.', sections: ['hardware', 'report'] },
+  ].filter((t) => t.id !== 'app' || invoke);   // the App tab is for the desktop app only
+  for (const t of TABS) for (const id of t.sections) root.querySelector(`#${id}`).dataset.tab = t.id;
+  $h('#st-tabs').innerHTML = TABS.map((t) => `<button type="button" data-tab="${t.id}" aria-pressed="false">${t.label}</button>`).join('');
+  $h('#st-tabs').addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) go('settings', b.dataset.tab); });
+
+  function jump(target) {
+    const section = target && !TABS.some((t) => t.id === target) ? root.querySelector(`#${CSS.escape(target)}`) : null;
+    const tab = TABS.find((t) => t.id === (section?.dataset.tab ?? target)) ?? TABS.find((t) => t.id === lastSettingsTab) ?? TABS[0];
+    lastSettingsTab = tab.id;
+    $h('#st-tab-about').textContent = tab.about;
+    $h('#st-tabs').querySelectorAll('button').forEach((b) => b.setAttribute('aria-pressed', b.dataset.tab === tab.id));
+    root.querySelectorAll('section[data-tab]').forEach((s) => s.classList.toggle('tab-off', s.dataset.tab !== tab.id));
+    if (section) requestAnimationFrame(() => section.scrollIntoView({ block: 'start' }));
+    else root.closest('.main')?.scrollTo?.(0, 0);
+  }
   jump(param);
 
   return {

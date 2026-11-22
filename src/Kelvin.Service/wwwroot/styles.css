@@ -435,3 +435,7 @@ input[type="range"] { flex: 1; accent-color: var(--accent); height: 24px; }
 .import-row > span { display: grid; gap: var(--space-3xs); min-width: 0; }
 .import-row .what { color: var(--text-2); }
 .import-row.off .what { color: var(--text-3); }
+
+/* ---------- Settings tabs ---------- */
+.settings-tabs { margin-top: calc(var(--space-sm) * -1); }
+.tab-off { display: none !important; }

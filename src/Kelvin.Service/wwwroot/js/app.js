@@ -150,7 +150,7 @@ function updateSafetyNotice(s) {
   el.className = `float-notice ${show === 'override' ? 'crit' : 'calm'}`;
   el.innerHTML = `${icon('shield', 20)}
     <div class="grow"><strong>${title}</strong><p>${body.replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[c])}</p>
-      <a href="#/settings">Safety limits</a></div>
+      <a href="#/settings/safety">Safety limits</a></div>
     <button type="button" class="close" aria-label="Dismiss">${icon('close', 16)}</button>`;
   el.hidden = false;
 }
