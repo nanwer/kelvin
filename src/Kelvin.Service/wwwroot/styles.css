@@ -91,6 +91,8 @@ strong { font-weight: 600; }
 .page-head { display: flex; align-items: flex-end; justify-content: space-between; gap: var(--space-md); flex-wrap: wrap; }
 .page-head p { color: var(--text-3); margin-top: var(--space-xs); max-width: 64ch; }
 .connecting { color: var(--text-2); padding: var(--space-xl); }
+.offline-help { margin-top: var(--space-sm); max-width: 60ch; }
+.rail-status a { color: var(--warn); text-decoration: underline; text-underline-offset: 2px; }
 
 /* ---------- Panels: smoked glass with a lit top edge ---------- */
 .panel { background: var(--panel); color: var(--text); border-radius: var(--radius); box-shadow: var(--glass-hi); }

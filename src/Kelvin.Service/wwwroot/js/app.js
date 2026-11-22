@@ -80,6 +80,26 @@ export async function installUpdate() {
   catch (e) { toast(String(e), true); }
 }
 
+// ---- Self-repair (desktop app only)
+const RELEASES_URL = 'https://github.com/nanwer/kelvin/releases/latest';
+let appVersion = '';
+if (tauriInvoke) tauriInvoke('plugin:app|version').then((v) => { appVersion = v; if (state) renderStatus(); }).catch(() => {});
+
+document.addEventListener('click', async (e) => {
+  if (e.target.closest('#repair-link')) {
+    e.preventDefault();
+    if (tauriInvoke) tauriInvoke('plugin:opener|open_url', { url: RELEASES_URL }).catch(() => {});
+    else window.open(RELEASES_URL, '_blank', 'noopener');
+    return;
+  }
+  const btn = e.target.closest('#start-service');
+  if (!btn) return;
+  btn.disabled = true;
+  btn.textContent = 'Starting…';
+  try { await tauriInvoke('start_service'); }
+  catch (err) { toast(String(err), true); btn.disabled = false; btn.textContent = 'Start it now'; }
+});
+
 // ---- Notifications for temperature alerts
 // The service records alert events; whichever Kelvin window is open turns new ones into
 // notifications. In the desktop app that's a Windows notification, even while it sits in the tray.
@@ -202,15 +222,30 @@ function renderStatus() {
     railStatus.innerHTML = '<div class="row"><span class="dot crit"></span>Service not running</div>';
     if (!state) {
       const waited = (Date.now() - startedAt) / 1000;
-      main.innerHTML = waited < 20
-        ? '<div class="connecting">Starting the Kelvin service…</div>'
-        : `<div class="connecting"><p><strong>Kelvin's background service isn't responding.</strong></p>
-           <p class="muted" style="margin-top:8px;max-width:60ch">Open Services in Windows, find "Kelvin hardware service" and start it, or reinstall Kelvin. This window connects as soon as it's running.</p></div>`;
+      // The desktop app starts a stopped service by itself within about 30 seconds.
+      const stage = waited < 40 ? 'starting' : 'stuck';
+      if (main.dataset.offline !== stage) {
+        main.dataset.offline = stage;
+        main.innerHTML = stage === 'starting'
+          ? '<div class="connecting">Starting the Kelvin service…</div>'
+          : `<div class="connecting"><p><strong>Kelvin's background service isn't running.</strong></p>
+             <p class="muted offline-help">Your fans are on BIOS control until it is. ${tauriInvoke
+               ? 'Kelvin tried to start it and couldn\'t. Try once more here; Windows may ask for permission.'
+               : 'Open Services in Windows, find "Kelvin hardware service" and start it, or run the Kelvin installer again.'}
+               This window connects as soon as the service is running.</p>
+             ${tauriInvoke ? '<p class="offline-help"><button class="btn primary" id="start-service">Start it now</button></p>' : ''}</div>`;
+      }
     }
     return;
   }
+  delete main.dataset.offline;
   const s = state.system;
   const rows = [];
+  // The app and the service are installed together. Different versions mean an update stopped
+  // halfway, which the updater can't see (the app already has the new version).
+  if (appVersion && s.version && s.version !== 'dev' && s.version !== appVersion) {
+    rows.push(`<div class="row"><span class="dot warn"></span><a href="${RELEASES_URL}" id="repair-link" title="The app is ${appVersion} but its service is ${s.version}. Run the installer again to finish.">Update didn't finish</a></div>`);
+  }
   if (state.safety.override) rows.push('<div class="row"><span class="dot crit"></span>Safety override on</div>');
   rows.push(s.simulated && !s.demo
     ? '<div class="row"><span class="dot warn"></span>Simulated hardware</div>'

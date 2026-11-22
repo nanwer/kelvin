@@ -11,6 +11,7 @@ use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -45,6 +46,79 @@ fn windows_service_installed() -> bool {
     cmd.args(["query", WINDOWS_SERVICE]).stdout(Stdio::null()).stderr(Stdio::null());
     hide_console(&mut cmd);
     cmd.status().map(|s| s.success()).unwrap_or(false)
+}
+
+/// Set while an update is being installed: the installer stops the service on purpose then.
+static UPDATING: AtomicBool = AtomicBool::new(false);
+
+/// Asks Windows to start the installed service. Kelvin's installer lets signed-in users start it
+/// (never stop it), so this needs no administrator prompt. Returns sc.exe's exit code: 0 started,
+/// 1056 already running, 5 not allowed (an install from before 0.6.2).
+fn start_windows_service() -> Option<i32> {
+    let mut cmd = Command::new("sc.exe");
+    cmd.args(["start", WINDOWS_SERVICE]).stdout(Stdio::null()).stderr(Stdio::null());
+    hide_console(&mut cmd);
+    cmd.status().ok().and_then(|s| s.code())
+}
+
+/// Keeps the installed service alive. Windows restarts it after a crash, but not after an update
+/// that failed halfway or anything else that left it stopped. When the service has been
+/// unreachable for two checks in a row (about 20 seconds), this starts it. Starting is harmless
+/// if it is already running or still shutting down: Windows just refuses.
+fn watch_service() {
+    std::thread::spawn(|| {
+        let mut misses = 0u32;
+        std::thread::sleep(Duration::from_secs(3));
+        loop {
+            if UPDATING.load(Ordering::Relaxed) || service_running() {
+                misses = 0;
+            } else {
+                misses += 1;
+                if misses >= 2 {
+                    start_windows_service();
+                    misses = 0;
+                    std::thread::sleep(Duration::from_secs(20)); // give it time to come up
+                }
+            }
+            std::thread::sleep(Duration::from_secs(10));
+        }
+    });
+}
+
+/// The "Start it now" button on the screen shown when the service isn't running. Tries the quiet
+/// way first; if this install doesn't allow that yet, asks for administrator rights once.
+#[tauri::command]
+async fn start_service() -> Result<(), String> {
+    if service_running() {
+        return Ok(());
+    }
+    if !windows_service_installed() {
+        return Err("Kelvin's service isn't installed. Run the Kelvin installer again.".into());
+    }
+    match start_windows_service() {
+        Some(0) | Some(1056) => Ok(()),
+        _ => {
+            let mut cmd = Command::new("powershell.exe");
+            cmd.args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                "Start-Process sc.exe -ArgumentList 'start KelvinService' -Verb RunAs -WindowStyle Hidden -Wait",
+            ])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+            hide_console(&mut cmd);
+            let allowed = cmd.status().map(|s| s.success()).unwrap_or(false);
+            let deadline = Instant::now() + Duration::from_secs(15);
+            while allowed && Instant::now() < deadline {
+                if service_running() {
+                    return Ok(());
+                }
+                std::thread::sleep(Duration::from_millis(500));
+            }
+            Err("The service didn't start. Run the Kelvin installer again to repair it.".into())
+        }
+    }
 }
 
 /// The service process, if this app started it. A service started some other way (an installed
@@ -159,10 +233,11 @@ async fn install_update(app: AppHandle) -> Result<(), String> {
     let Some(update) = app.updater().map_err(|e| e.to_string())?.check().await.map_err(|e| e.to_string())? else {
         return Err("Kelvin is already up to date.".into());
     };
-    update
-        .download_and_install(|_chunk, _total| {}, || {})
-        .await
-        .map_err(|e| format!("The update couldn't be installed: {e}"))?;
+    // The installer stops the service, so the watchdog must not start it again underneath it.
+    UPDATING.store(true, Ordering::Relaxed);
+    let result = update.download_and_install(|_chunk, _total| {}, || {}).await;
+    UPDATING.store(false, Ordering::Relaxed);
+    result.map_err(|e| format!("The update couldn't be installed: {e}"))?;
     app.restart();
 }
 
@@ -225,7 +300,7 @@ fn main() {
         // Windows notifications for temperature alerts. The service decides when to alert (it runs
         // without a desktop); this app, running in the tray, shows them.
         .plugin(tauri_plugin_notification::init())
-        .invoke_handler(tauri::generate_handler![check_for_update, install_update, update_tray])
+        .invoke_handler(tauri::generate_handler![check_for_update, install_update, update_tray, start_service])
         // A second launch (e.g. clicking the shortcut again) brings the existing window forward.
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| show_main(app)))
         .plugin(tauri_plugin_autostart::init(
@@ -240,6 +315,9 @@ fn main() {
                     Ok(child) => *app.state::<Service>().0.lock().unwrap() = Some(child),
                     Err(e) => eprintln!("Couldn't start the Kelvin service: {e}"),
                 }
+            }
+            if installed {
+                watch_service();
             }
 
             screen::start();

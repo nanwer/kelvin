@@ -11,11 +11,15 @@ public enum OpenRgbState { NotInstalled, Starting, RunningManaged, RunningExtern
 /// (no window, nothing to click), with the administrator rights it needs to reach RAM and
 /// motherboard lighting, restarts it if it crashes, and stops it with the service.
 /// If the user already runs OpenRGB themselves, Kelvin just uses that one.
+/// <para>The OpenRGB Kelvin starts can never outlive the service: Windows ends it with the service
+/// even after a crash, and a copy left over from before that existed is closed on sight. A leftover
+/// would hold its files open and block the next Kelvin update.</para>
 /// </summary>
 public sealed class OpenRgbHost(int port = 6742) : IDisposable
 {
     private static readonly TimeSpan RestartBackoff = TimeSpan.FromSeconds(30);
 
+    private readonly ChildJob _job = new();
     private Process? _process;
     private DateTime _lastStart = DateTime.MinValue;
     private readonly object _gate = new();
@@ -34,20 +38,25 @@ public sealed class OpenRgbHost(int port = 6742) : IDisposable
                 return;
             }
 
-            if (Listening())
+            ExecutablePath ??= FindExecutable();
+
+            // Kelvin's own OpenRGB running without Kelvin having started it is a leftover from a
+            // service that died. Nothing manages it, so close it and start a fresh one.
+            var leftovers = CloseLeftovers();
+
+            if (leftovers == 0 && Listening())
             {
                 State = OpenRgbState.RunningExternal; // the user's own OpenRGB, with its server on
                 return;
             }
 
-            ExecutablePath ??= FindExecutable();
             if (ExecutablePath is null)
             {
                 State = OpenRgbState.NotInstalled;
                 return;
             }
 
-            if (DateTime.UtcNow - _lastStart < RestartBackoff)
+            if (leftovers == 0 && DateTime.UtcNow - _lastStart < RestartBackoff)
             {
                 State = _process is null ? OpenRgbState.Starting : OpenRgbState.Failed;
                 return;
@@ -75,6 +84,7 @@ public sealed class OpenRgbHost(int port = 6742) : IDisposable
                 UseShellExecute = false,
                 CreateNoWindow = true,
             });
+            if (_process is not null) _job.Add(_process);
             State = OpenRgbState.Starting;
         }
         catch (Exception)
@@ -101,6 +111,31 @@ public sealed class OpenRgbHost(int port = 6742) : IDisposable
         }
     }
 
+    /// <summary>
+    /// Closes every running copy of the OpenRGB that ships with Kelvin, other than the one this host
+    /// started. Returns how many it closed. The user's own OpenRGB install is never touched.
+    /// </summary>
+    private int CloseLeftovers()
+    {
+        var executable = BundledPath;
+        if (!File.Exists(executable)) return 0;
+        var closed = 0;
+        foreach (var p in Process.GetProcessesByName(Path.GetFileNameWithoutExtension(executable)))
+        {
+            try
+            {
+                if (_process is { HasExited: false } && p.Id == _process.Id) continue;
+                if (!string.Equals(p.MainModule?.FileName, executable, StringComparison.OrdinalIgnoreCase)) continue;
+                p.Kill(entireProcessTree: true);
+                p.WaitForExit(5000);
+                closed++;
+            }
+            catch { /* already gone, or not ours to inspect */ }
+            finally { p.Dispose(); }
+        }
+        return closed;
+    }
+
     /// <summary>True when Kelvin started the OpenRGB that's running, so it may restart it.</summary>
     public bool IsManaged
     {
@@ -118,6 +153,10 @@ public sealed class OpenRgbHost(int port = 6742) : IDisposable
         }
     }
 
+    /// <summary>The copy that ships with Kelvin: &lt;install&gt;\openrgb, next to &lt;install&gt;\service.</summary>
+    public static string BundledPath { get; } =
+        Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "openrgb", "OpenRGB.exe"));
+
     /// <summary>Looks in the usual install folders, including per-user installs for any user.</summary>
     public static string? FindExecutable()
     {
@@ -126,8 +165,7 @@ public sealed class OpenRgbHost(int port = 6742) : IDisposable
 
         var candidates = new List<string>
         {
-            // The copy that ships with Kelvin: <install>\openrgb, next to <install>\service.
-            Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "openrgb", "OpenRGB.exe")),
+            BundledPath,
             // Otherwise a separate OpenRGB install.
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "OpenRGB", "OpenRGB.exe"),
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "OpenRGB", "OpenRGB.exe"),
@@ -157,6 +195,7 @@ public sealed class OpenRgbHost(int port = 6742) : IDisposable
             }
             _process?.Dispose();
             _process = null;
+            _job.Dispose();
         }
     }
 }
