@@ -61,7 +61,9 @@ var lighting = new LightingEngine(rgbHw, store, () => fans.Sensors);
 var openRgbHost = simulate ? null : new OpenRgbHost();
 // Laptop fan modes: the vendor's (HP Omen, ASUS, Lenovo) where available, else Windows power modes.
 IFanModeProvider? fanModes = laptopSim ? new SimulatedFanModes() : simulate ? null : FanModeDetector.Detect();
-var runtime = new Runtime(fanHw, rgbHw, fans, lighting, store, elevated, openRgbHost, thermal, fanModes, demo);
+// The last hour and day of readings, for the History page. Demo mode starts from made-up data.
+var sensorLog = new SensorLog(demo ? null : SensorLog.PathNextTo(settingsPath));
+var runtime = new Runtime(fanHw, rgbHw, fans, lighting, store, elevated, openRgbHost, thermal, fanModes, sensorLog, demo);
 _ = runtime.Profiles; // set up default profiles before the API takes requests
 
 builder.Services.AddSingleton(runtime);
@@ -121,6 +123,8 @@ var api = app.MapGroup("/api");
 
 api.MapGet("/state", (Runtime rt) => rt.Snapshot());
 api.MapGet("/report", (Runtime rt) => rt.Report());
+// Readings over time: ?range=hour (one every 5 seconds) or ?range=day (one a minute).
+api.MapGet("/history", (string? range, Runtime rt) => rt.Log.View(range == "day" ? "day" : "hour"));
 
 api.Map("/live", async (HttpContext ctx, Runtime rt, IHostApplicationLifetime life) =>
 {
@@ -158,6 +162,13 @@ api.MapPut("/fans", (FanSettings body, Runtime rt) =>
     {
         if (!double.IsFinite(body.FixedPercent) || !double.IsFinite(body.MinPercent) || !double.IsFinite(body.SmoothSeconds))
             return Results.BadRequest(new { error = "Fan speeds and times must be numbers." });
+        if (body.Mode == FanMode.Target)
+        {
+            if (!double.IsFinite(body.TargetTemp) || body.TargetTemp is < SettingsRules.MinTargetTemp or > SettingsRules.MaxTargetTemp)
+                return Results.BadRequest(new { error = $"Pick a target between {SettingsRules.MinTargetTemp:0} and {SettingsRules.MaxTargetTemp:0}°C." });
+            if (!rt.Fans.Sensors.Any(s => s.Id == body.SourceSensorId && s.Kind == SensorKind.Temperature))
+                return Results.BadRequest(new { error = "Pick the temperature this fan should keep down." });
+        }
         var clean = body.Clone();
         clean.Points ??= [];
         // Says why a curve can't be used; the shared rules below would quietly fall back to BIOS control.
@@ -241,6 +252,27 @@ api.MapPut("/alerts", (AlertSettings body) =>
 });
 
 api.MapPost("/alerts/test", (Runtime rt) => Results.Ok(rt.Alerts.Test()));
+
+// ---- Import from FanControl. Each call reads the file again, so what is saved is what was shown.
+// With no file text in the request, FanControl's own file is used if it is installed.
+api.MapGet("/import/fancontrol", (Runtime rt) =>
+{
+    try { return rt.PreviewImport(null) is { } p ? Results.Ok(p) : Results.Ok(new { file = (string?)null }); }
+    catch (FormatException ex) { return Results.Ok(new { file = (string?)null, error = ex.Message }); }
+});
+api.MapPost("/import/fancontrol/preview", (ImportRequest req, Runtime rt) =>
+{
+    if (req.Json is not { Length: > 0 and <= FanControlImport.MaxFileBytes }) return Results.BadRequest(new { error = "Choose a FanControl configuration file (a .json file under 2 MB)." });
+    try { return Results.Ok(rt.PreviewImport(req.Json)); }
+    catch (FormatException ex) { return Results.BadRequest(new { error = ex.Message }); }
+});
+api.MapPost("/import/fancontrol/apply", (ImportRequest req, Runtime rt) =>
+{
+    if (req.Json is { Length: > FanControlImport.MaxFileBytes }) return Results.BadRequest(new { error = "That file is too large." });
+    if (req.FanIds is not { Length: > 0 and <= 64 }) return Results.BadRequest(new { error = "Tick at least one fan to import." });
+    try { return Results.Ok(new { imported = rt.ApplyImport(req.Json, req.FanIds) }); }
+    catch (FormatException ex) { return Results.BadRequest(new { error = ex.Message }); }
+});
 
 // ---- Profiles
 api.MapPut("/profiles/active", (RecommendationRequest req, Runtime rt) =>
@@ -407,6 +439,7 @@ app.Run();
 
 record RecommendationRequest(string Id);
 record ProfileRequest(string? Name, string? FanMode);
+record ImportRequest(string? Json, string[]? FanIds);
 record MqttRequest(bool Enabled, string? Host, int Port, bool UseTls, string? Username, string? Password,
     string? BaseTopic, string? DiscoveryPrefix, bool AllowProfileControl);
 

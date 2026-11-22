@@ -57,6 +57,10 @@ export function describeControl(fan, state) {
   if (!s || s.mode === 'bios') return 'BIOS';
   if (s.mode === 'fixed') return `Fixed ${Math.round(s.fixedPercent)}%`;
   const src = state.sensors.find((x) => x.id === s.sourceSensorId);
+  if (s.mode === 'target') {
+    const what = !src ? 'no sensor' : src.role === 'virtual' ? 'CPU and GPU' : src.role === 'cpu' ? 'CPU' : src.role === 'gpu' ? 'GPU' : src.name;
+    return `Keeps ${what} under ${Math.round(s.targetTemp)}°C`;
+  }
   const preset = s.preset && s.preset !== 'custom' ? s.preset[0].toUpperCase() + s.preset.slice(1) : 'Custom';
   const follows = !src ? 'no sensor' : src.role === 'virtual' ? 'hottest' : src.role === 'cpu' ? 'CPU' : src.role === 'gpu' ? 'GPU' : src.name;
   return `${preset}, follows ${follows}`;

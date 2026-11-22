@@ -23,6 +23,7 @@ from the network.
 |---|---|
 | `GET /api/state` | Everything the app shows: sensors, fans, profiles, lighting, alerts, health |
 | `GET /api/report` | The hardware report (Markdown) |
+| `GET /api/history?range=hour` | Every temperature, load and fan over the last hour, one reading every 5 seconds. `range=day` gives the last day, one a minute. `times` are Unix seconds; each series has one value per time, `null` where there was no reading. |
 | `WebSocket /api/live` | The same as `/api/state`, pushed 4 times a second |
 
 ### Profiles
@@ -39,7 +40,10 @@ from the network.
 
 | Request | Body |
 |---|---|
-| `PUT /api/fans` | one fan's settings (`fanId`, `mode`, `points`, …) |
+| `PUT /api/fans` | one fan's settings (`fanId`, `mode`, `points`, …). `mode` is `bios`, `fixed`, `curve` or `target`; for `target`, send `sourceSensorId` and `targetTemp` (45 to 85). |
+| `GET /api/import/fancontrol` | What importing FanControl's own configuration would do, if FanControl is installed. Changes nothing. |
+| `POST /api/import/fancontrol/preview` | `{"json":"…"}`: the same for a configuration file's text. Changes nothing. |
+| `POST /api/import/fancontrol/apply` | `{"json":"…","fanIds":["…"]}`: save the previewed settings for those fans. Leave `json` out to use FanControl's own file. |
 | `PUT /api/fan-mode` | `{"id":"performance"}` (laptops) |
 | `PUT /api/lighting` | the `lighting` object |
 | `PUT /api/lighting/screen` | `{ "width", "height", "data" }`: base64 RGB pixels, row by row, at most 64 x 64. Feeds the Screen sync effect, so you can drive it from your own capture tool. |

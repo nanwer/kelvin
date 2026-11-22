@@ -13,6 +13,7 @@ public sealed class Runtime(
     Kelvin.Hardware.OpenRgbHost? openRgb,
     ThermalHistory thermal,
     IFanModeProvider? fanModes,
+    SensorLog log,
     bool demo = false) : IHostedService
 {
     private HashSet<string> _processes = new(StringComparer.OrdinalIgnoreCase);
@@ -69,6 +70,8 @@ public sealed class Runtime(
     private bool _driverInstalled = true;
 
     public FanEngine Fans => fans;
+    /// <summary>Readings over the last hour and day, for the History page.</summary>
+    public SensorLog Log => log;
     public LightingEngine Lighting => lighting;
     /// <summary>Whether the desktop app should be capturing the screen right now.</summary>
     public bool ScreenSyncActive => rgbHw.IsConnected && store.Read(s => s.Lighting.Effect) == LightingEffect.Screen;
@@ -77,6 +80,7 @@ public sealed class Runtime(
     {
         fanHw.Open();
         rgbHw.Open();
+        if (demo) log.SeedDemo(fanHw.Sensors, fanHw.Fans, DateTimeOffset.Now);
         // Re-apply the active profile's laptop fan mode: some vendors reset it on reboot.
         var mode = store.Read(s => s.Profiles.FirstOrDefault(p => p.Id == s.ActiveProfileId)?.FanMode ?? s.FanMode);
         if (mode is not null) { try { SetFanMode(mode); } catch { /* reported in the UI via Current */ } }
@@ -124,9 +128,11 @@ public sealed class Runtime(
             // Thermal history: skip readings taken while fans are measured or forced to full speed.
             if (!fans.Calibration.Running && !fans.Safety.Override && fans.Sensors.Count > 0)
                 thermal.Record(fans.Sensors, fans.Fans, WatchInterval.TotalMinutes);
+            if (fans.Sensors.Count > 0) log.Record(fans.Sensors, fans.Fans, DateTimeOffset.Now);
             if (DateTimeOffset.Now >= _nextAnalysis)
             {
                 _health = thermal.Analyze(fans.Sensors);
+                CheckForImport();
                 _nextAnalysis = DateTimeOffset.Now.AddMinutes(1);
             }
 
@@ -270,6 +276,7 @@ public sealed class Runtime(
         try { await Task.WhenAll(_loops); } catch (OperationCanceledException) { }
         fans.Dispose(); // hands every fan back to the BIOS
         thermal.Save();
+        log.Save();
         rgbHw.Dispose();
         openRgb?.Dispose();
         fanHw.Dispose();
@@ -286,7 +293,47 @@ public sealed class Runtime(
     }
 
     private IReadOnlyList<Recommendation> Recommendations() =>
-        Advisor.Build(fans.Fans, fans.Sensors, store.Current, _conflicts, _health);
+        Advisor.Build(fans.Fans, fans.Sensors, store.Current, _conflicts, _health, _importable);
+
+    // ---- Import from FanControl
+    private int _importable;
+
+    /// <summary>What importing would do: from the given file's text, or from FanControl's own file when null.</summary>
+    public ImportPreview? PreviewImport(string? json)
+    {
+        string? file = null;
+        if (json is null)
+        {
+            if (demo || FanControlImport.FindInstalled() is not { } found) return null;
+            (file, json) = found;
+        }
+        return FanControlImport.Read(json, fans.Fans, fans.Sensors, file);
+    }
+
+    /// <summary>Saves the previewed settings for the chosen fans. Returns how many were saved.</summary>
+    public int ApplyImport(string? json, IReadOnlyCollection<string> fanIds)
+    {
+        var chosen = (PreviewImport(json)?.Fans ?? [])
+            .Where(f => f.Settings is not null && f.FanId is not null && fanIds.Contains(f.FanId))
+            .GroupBy(f => f.FanId!).Select(g => g.First().Settings!).ToList();
+        if (chosen.Count == 0) return 0;
+        store.Mutate(s =>
+        {
+            foreach (var f in chosen)
+            {
+                s.Fans.RemoveAll(x => x.FanId == f.FanId);
+                s.Fans.Add(f);
+            }
+        });
+        return chosen.Count;
+    }
+
+    private void CheckForImport()
+    {
+        // Only worth looking while nothing is set up: that is the only time the suggestion shows.
+        try { _importable = store.Read(s => s.Fans.All(f => f.Mode == FanMode.Bios)) ? PreviewImport(null)?.Fans.Count(f => f.Settings is not null && f.Suggested) ?? 0 : 0; }
+        catch (Exception) { _importable = 0; }
+    }
 
     public bool Apply(string id)
     {
@@ -326,6 +373,7 @@ public sealed class Runtime(
         var fanSettings = settings.Fans.ToDictionary(f => f.FanId);
         var profiles = settings.FanProfiles.ToDictionary(p => p.FanId);
         var excluded = settings.Lighting.ExcludedDeviceIds;
+        var targets = fans.Targets;
 
         return new
         {
@@ -353,6 +401,8 @@ public sealed class Runtime(
                 f.Id, f.Name, f.Rpm, f.Percent, f.Controllable, f.IsPump,
                 settings = fanSettings.GetValueOrDefault(f.Id),
                 profile = profiles.GetValueOrDefault(f.Id),
+                // Target mode only: the temperature being held down, and whether the fan can hold it.
+                target = targets.GetValueOrDefault(f.Id),
             }),
             devices = rgbHw.Devices.Select(d => new { d.Id, d.Name, d.Vendor, d.Kind, d.LedCount, d.Zones, included = !excluded.Contains(d.Id) }),
             lighting = settings.Lighting,

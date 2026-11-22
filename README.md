@@ -19,6 +19,9 @@ Free, open source, Windows 10 and 11. No account, and nothing leaves your PC.
 
 - **Curves you can see.** Each fan runs on BIOS control, a fixed speed, or a temperature curve. Drag
   the points on a chart laid over a cool-to-hot scale and watch the live reading move along it.
+- **Or just name a temperature.** In *Target* mode you say "keep the CPU under 70°C" and Kelvin
+  finds the slowest fan speed that holds it: the fan idles at its floor while the PC is cool and
+  settles at whatever the load needs.
 - **Calm by design.** Modern CPUs jump 20°C or more for a few seconds whenever a task starts. Kelvin
   follows the average temperature over about 30 seconds (you choose how long), so fans don't rev at
   every spike. A real, lasting rise still gets a response straight away.
@@ -55,12 +58,19 @@ Free, open source, Windows 10 and 11. No account, and nothing leaves your PC.
   sensor, so a hot day doesn't look like dust.
 - **Alerts.** Set your own limits ("CPU above 85°C for 10 seconds") and get a Windows notification
   when one is crossed, even with Kelvin in the tray. Each episode notifies once.
+- **History.** Every temperature, fan speed and load over the last hour or the last day, on
+  charts that share one crosshair, so you can see what the fans did when the temperature rose.
 - **Conflict detection.** Kelvin spots Armoury Crate, iCUE, Razer Synapse, G HUB, SignalRGB,
   Gigabyte Control Center and FanControl, tells you they're in the way, and can close the lighting
   apps for you.
 
 ### Everything else
 
+- **Coming from FanControl?** Kelvin reads FanControl's configuration and sets your fans up the
+  same way: graph, linear, flat and mix curves, and its Auto curves as Target mode. You review
+  every fan before anything is saved.
+- **The temperature in the tray.** Kelvin's tray icon shows the CPU or graphics card temperature
+  as a number, in the color it has everywhere else in the app. The tooltip has the rest.
 - **Laptops.** Where a laptop runs its own fans, Kelvin switches its fan mode instead: Quiet,
   Balanced, Performance, and Max fan on HP Omen. It uses the HP Omen, ASUS ROG/TUF and Lenovo
   Legion interfaces where they exist (marked experimental until confirmed on each model) and

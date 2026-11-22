@@ -19,6 +19,9 @@ public sealed class FanEngine : IDisposable
     private readonly Dictionary<string, double> _applied = new();
     // The averaged temperature each fan follows, and which sensor it was averaged from.
     private readonly Dictionary<string, (string Sensor, double Temp)> _smoothed = new();
+    // Target mode: one controller per fan, kept while the fan stays in that mode on that sensor.
+    private readonly Dictionary<string, (string Sensor, TargetControl Control)> _targets = new();
+    private Dictionary<string, TargetStatus> _targetStatus = new();
 
     /// <summary>
     /// However long the averaging, a fan never treats the temperature as more than this far below
@@ -45,6 +48,9 @@ public sealed class FanEngine : IDisposable
 
     public IReadOnlyList<SensorReading> Sensors { get { lock (_gate) return _sensors; } }
     public IReadOnlyList<FanReading> Fans { get { lock (_gate) return _fans; } }
+
+    /// <summary>Fans in target mode: the temperature each one is holding down, and whether it can.</summary>
+    public IReadOnlyDictionary<string, TargetStatus> Targets { get { lock (_gate) return _targetStatus; } }
 
     public IReadOnlyDictionary<string, double[]> History
     {
@@ -80,7 +86,7 @@ public sealed class FanEngine : IDisposable
             var critical = CheckCritical();
             Safety = new SafetyState(critical is not null, critical);
 
-            if (_calibrating) return; // calibration drives the fans itself; safety is checked there too
+            if (_calibrating) { _targets.Clear(); _targetStatus = new(); return; } // calibration drives the fans itself; safety is checked there too
 
             if (critical is not null)
             {
@@ -89,15 +95,18 @@ public sealed class FanEngine : IDisposable
             }
 
             var settings = _store.Read(s => s.Fans.Select(f => f.Clone()).ToList());
+            var status = new Dictionary<string, TargetStatus>();
             foreach (var fan in _fans.Where(f => f.Controllable))
             {
                 var cfg = settings.FirstOrDefault(s => s.FanId == fan.Id);
+                if (cfg?.Mode != FanMode.Target) _targets.Remove(fan.Id);
                 if (cfg is null || cfg.Mode == FanMode.Bios)
                 {
                     Release(fan.Id);
                     continue;
                 }
 
+                var floor = Math.Max(cfg.MinPercent, fan.IsPump ? 50 : 0);
                 double target;
                 if (cfg.Mode == FanMode.Fixed)
                 {
@@ -109,13 +118,25 @@ public sealed class FanEngine : IDisposable
                     if (source is null || !double.IsFinite(source.Value))
                     {
                         // Losing the input sensor must never leave a fan parked at a low speed.
+                        _targets.Remove(fan.Id);
                         Release(fan.Id);
                         continue;
                     }
-                    target = Curves.Evaluate(cfg.Points, Smooth(fan.Id, source, cfg.SmoothSeconds, dt));
+                    var temp = Smooth(fan.Id, source, cfg.SmoothSeconds, dt);
+                    if (cfg.Mode == FanMode.Target)
+                    {
+                        if (!_targets.TryGetValue(fan.Id, out var held) || held.Sensor != source.Id)
+                            _targets[fan.Id] = held = (source.Id, new TargetControl());
+                        var now = _applied.TryGetValue(fan.Id, out var a) ? a : fan.Percent ?? floor;
+                        target = held.Control.Step(temp, cfg.TargetTemp, floor, now, dt);
+                        status[fan.Id] = new TargetStatus(Math.Round(temp, 1), cfg.TargetTemp, held.Control.CannotHold);
+                    }
+                    else
+                    {
+                        target = Curves.Evaluate(cfg.Points, temp);
+                    }
                 }
 
-                var floor = Math.Max(cfg.MinPercent, fan.IsPump ? 50 : 0);
                 target = Math.Clamp(Math.Max(target, floor), 0, 100);
 
                 var current = _applied.TryGetValue(fan.Id, out var c) ? c : fan.Percent ?? target;
@@ -125,6 +146,7 @@ public sealed class FanEngine : IDisposable
                 if (Math.Abs(next - target) < 0.5) next = target;
                 Apply(fan.Id, next);
             }
+            _targetStatus = status;
         }
     }
 

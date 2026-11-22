@@ -1,9 +1,10 @@
 import {
   api, toast, go, getUpdate, canUpdate, checkForUpdate, installUpdate,
-  canUpdate as isDesktopApp, notificationsSupported, enableBrowserNotifications,
+  canUpdate as isDesktopApp, notificationsSupported, enableBrowserNotifications, getTrayTemp, setTrayTemp,
 } from './app.js';
 import { icon } from './icons.js';
 import { createCurveEditor } from './curve.js';
+import { historyView } from './history.js';
 import {
   thermal, esc, fmtTemp, fmtRpm, fmtPct, clone, same, debounce,
   temperatureSensors, sensorLabel, describeControl,
@@ -152,7 +153,7 @@ function overview(root) {
     <header class="page-head"><div><h1>Overview</h1><p id="ov-sub"></p></div></header>
     <div class="stack" id="ov-banners"></div>
     <section class="panel">
-      <div class="panel-head"><h2>Temperatures</h2><span class="meta">Last 2 minutes</span></div>
+      <div class="panel-head"><h2>Temperatures</h2><span class="meta">Last 2 minutes · <a href="#/history">Last hour and day</a></span></div>
       <div class="scale">
         <div class="ruler" id="ov-ruler" role="img" aria-label="Where each temperature sits between 35 and 85 degrees"></div>
         <div class="ruler-labels"><span>35°C cool</span><span>60°C</span><span>85°C hot</span></div>
@@ -323,7 +324,7 @@ function fansView(root, { param }) {
     const src = lastState.sensors.find((s) => s.primary && s.role === role);
     return {
       fanId: fan.id, mode: 'bios', fixedPercent: 50, sourceSensorId: src?.id ?? 'virtual/hottest',
-      points: clone(lastState.presets.balanced), minPercent: 20, smoothSeconds: DEFAULT_SMOOTH, preset: 'balanced',
+      points: clone(lastState.presets.balanced), targetTemp: 70, minPercent: 20, smoothSeconds: DEFAULT_SMOOTH, preset: 'balanced',
     };
   }
 
@@ -367,10 +368,11 @@ function fansView(root, { param }) {
         <div class="field">
           <span class="label" id="mode-l">Who controls this fan</span>
           <div class="segmented" role="group" aria-labelledby="mode-l" id="fx-mode">
-            ${[['bios', 'BIOS'], ['fixed', 'Fixed speed'], ['curve', 'Curve']].map(([v, l]) => `<button type="button" data-v="${v}" aria-pressed="${d.mode === v}">${l}</button>`).join('')}
+            ${[['bios', 'BIOS'], ['fixed', 'Fixed speed'], ['curve', 'Curve'], ['target', 'Target']].map(([v, l]) => `<button type="button" data-v="${v}" aria-pressed="${d.mode === v}">${l}</button>`).join('')}
           </div>
           <span class="hint">${d.mode === 'bios' ? 'Your motherboard\'s own settings control this fan. Kelvin only watches.'
             : d.mode === 'fixed' ? 'The fan runs at one speed no matter the temperature.'
+            : d.mode === 'target' ? 'You pick a temperature to stay under. Kelvin finds the slowest speed that holds it.'
             : 'The fan speeds up as the temperature you pick rises.'}</span>
         </div>
         ${d.mode === 'fixed' ? `
@@ -385,7 +387,17 @@ function fansView(root, { param }) {
             <div class="field"><label for="fx-source">Follows</label>
               <select id="fx-source">${sensors.map((s) => `<option value="${esc(s.id)}" ${s.id === d.sourceSensorId ? 'selected' : ''}>${esc(sensorLabel(s))}</option>`).join('')}</select></div>
           </div>
-          <div id="fx-curve"></div>
+          <div id="fx-curve"></div>` : ''}
+        ${d.mode === 'target' ? `
+          <div class="field-row">
+            <div class="field"><label for="fx-source">Keep this cool</label>
+              <select id="fx-source">${sensors.map((s) => `<option value="${esc(s.id)}" ${s.id === d.sourceSensorId ? 'selected' : ''}>${esc(sensorLabel(s))}</option>`).join('')}</select></div>
+            <div class="field"><label for="fx-target">Keep it under</label>
+              <div class="slider"><input type="range" id="fx-target" min="45" max="85" value="${d.targetTemp ?? 70}"><output>${Math.round(d.targetTemp ?? 70)}°C</output></div></div>
+          </div>
+          <div class="field"><p class="target-live" id="fx-target-live" role="status"></p>
+          <span class="hint">While the PC is cool the fan drops to its slowest speed. As the temperature nears your target it speeds up, then settles at whatever holds it there, which takes a minute or two. Your safety limits still apply.</span></div>` : ''}
+        ${d.mode === 'curve' || d.mode === 'target' ? `
           <div class="field-row">
             <div class="field"><label for="fx-min">Never slower than</label>
               <div class="slider"><input type="range" id="fx-min" min="0" max="60" value="${d.minPercent}"><output>${Math.round(d.minPercent)}%</output></div>
@@ -407,7 +419,13 @@ function fansView(root, { param }) {
 
     el.querySelector('#fx-mode').addEventListener('click', (e) => {
       const b = e.target.closest('button'); if (!b) return;
-      draft.mode = b.dataset.v; renderEditor();
+      draft.mode = b.dataset.v;
+      // Target mode parks the fan at its floor whenever the PC is cool, so the floor has to be a
+      // speed the fan really turns at. Use what Measure fans found.
+      if (draft.mode === 'target' && p?.stopPercent != null && draft.minPercent < p.stopPercent + 5) {
+        draft.minPercent = Math.min(p.stopPercent + 10, 40);
+      }
+      renderEditor();
     });
     el.querySelector('#fx-preset')?.addEventListener('click', (e) => {
       const b = e.target.closest('button'); if (!b) return;
@@ -416,6 +434,7 @@ function fansView(root, { param }) {
       renderEditor();
     });
     bindSlider('#fx-fixed', (v) => { draft.fixedPercent = v; return `${v}%`; });
+    bindSlider('#fx-target', (v) => { draft.targetTemp = v; updateLive(); return `${v}°C`; });
     bindSlider('#fx-min', (v) => { draft.minPercent = v; return `${v}%`; });
     bindSlider('#fx-resp', (v) => { draft.smoothSeconds = v; return `${v}s`; });
     el.querySelector('#fx-source')?.addEventListener('change', (e) => { draft.sourceSensorId = e.target.value; syncFoot(); });
@@ -470,10 +489,27 @@ function fansView(root, { param }) {
     const live = root.querySelector('#fx-live');
     if (!fan || !live) return;
     live.textContent = `${fmtRpm(fan.rpm)} rpm at ${fmtPct(fan.percent)}`;
-    if (curve) {
-      const src = lastState.sensors.find((s) => s.id === draft.sourceSensorId);
-      curve.setLive(src?.value, fan.percent);
+    const src = lastState.sensors.find((s) => s.id === draft.sourceSensorId);
+    if (curve) curve.setLive(src?.value, fan.percent);
+    const tl = root.querySelector('#fx-target-live');
+    if (tl) tl.innerHTML = targetStatus(fan, src);
+  }
+
+  // One line saying what target mode is doing right now, or what it will do once saved.
+  function targetStatus(fan, src) {
+    const goal = Math.round(draft.targetTemp ?? 70);
+    const t = fan.target;
+    const saved = fan.settings?.mode === 'target' && same(draft, base);
+    if (!src) return 'Pick a temperature for this fan to keep down.';
+    if (!saved || !t) return `${esc(sensorLabel(src))} is ${fmtTemp(src.value)}°C now. Save to have Kelvin keep it under ${goal}°C.`;
+    const now = Math.round(t.temp);
+    if (t.cannotHold) {
+      return `<span class="tag warn">Can't hold ${goal}°C</span> The fan is at full speed and it's still ${now}°C. This is more heat than the cooler can move at this load; it comes back down when the load eases.`;
     }
+    const pct = fmtPct(fan.percent);
+    if (now <= goal - 6) return `${now}°C, well under your ${goal}°C target. The fan is at ${pct}${Math.round(fan.percent ?? 0) <= Math.round(draft.minPercent) ? ', its slowest' : ' and slowing down'}.`;
+    if (now > goal) return `${now}°C, above your ${goal}°C target. The fan is at ${pct} and speeding up.`;
+    return `Holding ${now}°C with the fan at ${pct}.`;
   }
 
   function select(id) {
@@ -981,6 +1017,7 @@ function adviceView(root) {
     if (b.dataset.act === 'apply') run(() => api('POST', '/recommendations/apply', { id }), 'Applied');
     if (b.dataset.act === 'calibrate') run(() => api('POST', '/fans/calibrate'), 'Measuring fans. This takes about 30 seconds.');
     if (b.dataset.act === 'open') go('fans', b.dataset.fan);
+    if (b.dataset.act === 'import') go('settings', 'import');
   });
 
   return {
@@ -1011,6 +1048,7 @@ function adviceView(root) {
           <div class="actions">
             ${r.action === 'calibrate' ? `<button class="btn primary sm" data-act="calibrate" ${cal.running ? 'disabled' : ''}>Measure fans</button>` : ''}
             ${r.action === 'applyFan' ? `<button class="btn sm ghost" data-act="open" data-fan="${esc(r.fanId)}">Preview</button><button class="btn primary sm" data-act="apply">Apply</button>` : ''}
+            ${r.action === 'import' ? '<button class="btn primary sm" data-act="import">Review</button>' : ''}
             ${r.action === 'closeApp' ? `<button class="btn primary sm" data-close-conflicts="${esc(r.id.slice('conflict:'.length))}" data-names="${esc(r.title.replace(/ is running$/, ''))}">Close for me</button>` : ''}
             ${r.action !== 'calibrate' && r.action !== 'closeApp' ? '<button class="btn sm ghost" data-act="dismiss">Dismiss</button>' : ''}
           </div>
@@ -1021,7 +1059,7 @@ function adviceView(root) {
 
 // ---------------------------------------------------------------- Settings
 
-function settingsView(root) {
+function settingsView(root, { param } = {}) {
   root.innerHTML = `<div class="page">
     <header class="page-head"><div><h1>Settings</h1></div></header>
     <section class="panel">
@@ -1061,6 +1099,16 @@ function settingsView(root) {
         <label class="switch"><input type="checkbox" id="st-autostart" aria-label="Start Kelvin with Windows"><span></span></label>
       </div>
       <div class="device">
+        <div><strong>Tray icon</strong><span class="faint">Show a temperature as a number on Kelvin's icon next to the clock. Rest the pointer on it for the other temperatures and fan speeds.</span></div>
+        <span></span>
+        <select id="st-tray" aria-label="What the tray icon shows">
+          <option value="cpu">CPU temperature</option>
+          <option value="gpu">Graphics card temperature</option>
+          <option value="hottest">Hotter of the two</option>
+          <option value="off">Kelvin's icon</option>
+        </select>
+      </div>
+      <div class="device">
         <div><strong>Closing the window</strong><span class="faint">Kelvin stays in the tray. Your fan curves and lighting are run by Kelvin's background service, so they keep working even after you quit the app. If that service ever stops, fans go back to your BIOS settings.</span></div>
       </div>
     </section>
@@ -1089,6 +1137,19 @@ function settingsView(root) {
         <div class="actions"><button class="btn primary" id="ha-save">Save and connect</button><span class="faint" id="ha-topics"></span></div>
       </div>
     </section>
+    <section class="panel" id="import">
+      <div class="panel-head"><h2>Import from FanControl</h2></div>
+      <div class="panel-body stack">
+        <p class="muted" style="max-width:72ch">Coming from FanControl? Kelvin can read its configuration and set your fans up the same way. You see what each fan would get first, and nothing changes until you import.</p>
+        <p id="im-found" class="faint"></p>
+        <div class="actions">
+          <button class="btn primary" id="im-review" hidden>Review FanControl's settings</button>
+          <button class="btn" id="im-choose">Choose a file…</button>
+          <input type="file" id="im-file" accept=".json,application/json" hidden>
+        </div>
+        <div id="im-preview" class="stack" style="gap:12px" hidden></div>
+      </div>
+    </section>
     <section class="panel" id="st-updates" hidden>
       <div class="panel-head"><h2>Updates</h2><span class="meta" id="st-version"></span></div>
       <div class="device">
@@ -1115,6 +1176,67 @@ function settingsView(root) {
       </div>
     </section>
   </div>`;
+
+  // ---- Import from FanControl
+  const $i = (s) => root.querySelector(s);
+  let importJson = null;   // the chosen file's text, or null for FanControl's own file
+  let importPreview = null;
+
+  function showImport(p, fileName) {
+    importPreview = p;
+    const box = $i('#im-preview');
+    box.hidden = false;
+    const ready = p.fans.filter((f) => f.settings);
+    box.innerHTML = `
+      <p class="faint">${esc(fileName ?? p.file ?? 'FanControl')}${p.version ? `, saved by FanControl version ${esc(p.version)}` : ''}</p>
+      ${p.notes.map((n) => `<p class="tag warn" style="white-space:normal">${esc(n)}</p>`).join('')}
+      <div class="import-list">${p.fans.map((f, i) => `
+        <label class="import-row ${f.settings ? '' : 'off'}">
+          <input type="checkbox" data-i="${i}" ${f.settings ? (f.suggested ? 'checked' : '') : 'disabled'} aria-label="Import ${esc(f.fanName ?? f.label)}">
+          <span><strong>${esc(f.fanName ?? f.label)}</strong>${f.fanName && f.fanName.toLowerCase() !== f.label.toLowerCase() ? ` <span class="faint">"${esc(f.label)}" in FanControl</span>` : ''}
+            <span class="what">${esc(f.summary)}</span>
+            ${f.note ? `<span class="faint">${esc(f.note)}</span>` : ''}</span>
+        </label>`).join('')}</div>
+      ${ready.length ? `<p class="faint">Importing replaces what these fans are set to in your active profile. Close FanControl afterwards, so the two don't both drive your fans.</p>
+        <div class="actions"><button class="btn primary" id="im-apply">Import ticked fans</button><button class="btn ghost" id="im-cancel">Cancel</button></div>`
+        : '<p class="muted">None of these can be brought over to this PC.</p>'}`;
+    box.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  }
+
+  $i('#im-review').addEventListener('click', () => run(async () => {
+    importJson = null;
+    const p = await api('GET', '/import/fancontrol');
+    if (!p?.fans) throw new Error(p?.error ?? 'FanControl\'s settings are no longer there.');
+    showImport(p);
+  }));
+  $i('#im-choose').addEventListener('click', () => $i('#im-file').click());
+  $i('#im-file').addEventListener('change', (e) => run(async () => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    if (file.size > 2 * 1024 * 1024) throw new Error('That file is too large to be a FanControl configuration.');
+    importJson = await file.text();
+    showImport(await api('POST', '/import/fancontrol/preview', { json: importJson }), file.name);
+  }));
+  $i('#im-preview').addEventListener('click', (e) => {
+    if (e.target.closest('#im-cancel')) { $i('#im-preview').hidden = true; return; }
+    if (!e.target.closest('#im-apply')) return;
+    const fanIds = [...$i('#im-preview').querySelectorAll('input:checked')].map((c) => importPreview.fans[Number(c.dataset.i)].fanId);
+    if (!fanIds.length) { toast('Tick at least one fan to import.', true); return; }
+    run(async () => {
+      const r = await api('POST', '/import/fancontrol/apply', { json: importJson, fanIds });
+      $i('#im-preview').hidden = true;
+      toast(`Imported ${r.imported} fan${r.imported === 1 ? '' : 's'} from FanControl. See them on the Fans page.`);
+    });
+  });
+  api('GET', '/import/fancontrol').then((p) => {
+    const found = Boolean(p?.fans);
+    $i('#im-review').hidden = !found;
+    $i('#im-choose').classList.toggle('primary', false);
+    $i('#im-found').textContent = found
+      ? `Kelvin found FanControl's settings on this PC (${p.file}).`
+      : 'Kelvin looks where FanControl\'s installer puts it. For a portable copy, choose the file yourself: it is in the Configurations folder next to FanControl.exe, usually userConfig.json.';
+  }).catch(() => {});
 
   // ---- Home Assistant (MQTT)
   let haLoaded = false;
@@ -1262,6 +1384,9 @@ function settingsView(root) {
     const box = root.querySelector('#st-autostart');
     root.querySelector('#st-app').hidden = false;
     invoke('plugin:autostart|is_enabled').then((on) => { box.checked = on; }).catch(() => {});
+    const trayPick = root.querySelector('#st-tray');
+    trayPick.value = getTrayTemp();
+    trayPick.addEventListener('change', () => setTrayTemp(trayPick.value));
     box.addEventListener('change', () => run(
       () => invoke(box.checked ? 'plugin:autostart|enable' : 'plugin:autostart|disable'),
       box.checked ? 'Kelvin will start with Windows' : 'Kelvin won\'t start with Windows',
@@ -1274,7 +1399,12 @@ function settingsView(root) {
     criticalGpuTemp: Number(root.querySelector('#st-gpu').value),
   }), 'Safety limits saved'));
 
+  // A link such as #/settings/import opens the page at that section.
+  const jump = (id) => { if (id) requestAnimationFrame(() => root.querySelector(`#${CSS.escape(id)}`)?.scrollIntoView({ block: 'start' })); };
+  jump(param);
+
   return {
+    setParam: jump,
     update(state) {
       if (!loaded) {
         root.querySelector('#st-cpu').value = state.safetySettings.criticalCpuTemp;
@@ -1318,6 +1448,7 @@ export const views = {
   fans: fansView,
   lighting: lightingView,
   profiles: profilesView,
+  history: historyView,
   health: healthView,
   advice: adviceView,
   settings: settingsView,

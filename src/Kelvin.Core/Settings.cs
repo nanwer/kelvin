@@ -3,7 +3,7 @@ using System.Text.Json.Serialization;
 
 namespace Kelvin.Core;
 
-public enum FanMode { Bios, Fixed, Curve }
+public enum FanMode { Bios, Fixed, Curve, Target }
 
 public sealed record CurvePoint(double Temp, double Percent);
 
@@ -14,6 +14,11 @@ public sealed class FanSettings
     public double FixedPercent { get; set; } = 50;
     public string SourceSensorId { get; set; } = "";
     public List<CurvePoint> Points { get; set; } = [];
+    /// <summary>
+    /// Target mode: the temperature to keep the followed sensor under, with the fan as slow as
+    /// that allows (see <see cref="TargetControl"/>).
+    /// </summary>
+    public double TargetTemp { get; set; } = 70;
     /// <summary>Never drive the fan below this, so it can't stall.</summary>
     public double MinPercent { get; set; } = 20;
     /// <summary>
@@ -27,7 +32,7 @@ public sealed class FanSettings
     public FanSettings Clone() => new()
     {
         FanId = FanId, Mode = Mode, FixedPercent = FixedPercent, SourceSensorId = SourceSensorId,
-        Points = [.. Points], MinPercent = MinPercent, SmoothSeconds = SmoothSeconds, Preset = Preset,
+        Points = [.. Points], TargetTemp = TargetTemp, MinPercent = MinPercent, SmoothSeconds = SmoothSeconds, Preset = Preset,
     };
 }
 

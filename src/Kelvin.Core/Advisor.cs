@@ -2,7 +2,7 @@ namespace Kelvin.Core;
 
 public enum Severity { Info, Suggestion, Warning }
 
-public enum RecommendationAction { None, Calibrate, ApplyFan, CloseApp }
+public enum RecommendationAction { None, Calibrate, ApplyFan, CloseApp, Import }
 
 public sealed record Recommendation(
     string Id,
@@ -25,9 +25,19 @@ public static class Advisor
         IReadOnlyList<SensorReading> sensors,
         KelvinSettings settings,
         IReadOnlyList<Conflict> conflicts,
-        HealthReport? health = null)
+        HealthReport? health = null,
+        int importableFans = 0)
     {
         var recs = new List<Recommendation>();
+
+        // Someone arriving from FanControl with nothing set up here yet: offer to bring it over.
+        if (importableFans > 0 && settings.Fans.All(f => f.Mode == FanMode.Bios))
+        {
+            recs.Add(new("import:fancontrol", Severity.Suggestion, "Bring your FanControl setup over",
+                $"Kelvin found FanControl's settings on this PC and can turn {(importableFans == 1 ? "one fan's settings" : $"{importableFans} fans' settings")} into its own. " +
+                "You see exactly what would change before anything is saved.",
+                RecommendationAction.Import));
+        }
 
         foreach (var part in health?.Parts ?? [])
         {
@@ -73,7 +83,8 @@ public static class Advisor
             if (rec is null) continue;
 
             var current = settings.Fans.FirstOrDefault(f => f.FanId == fan.Id);
-            if (current is not null && Matches(current, rec.Settings!)) continue;
+            // Target mode is a deliberate choice of a different way to run the fan, not a curve to improve on.
+            if (current is not null && (current.Mode == FanMode.Target || Matches(current, rec.Settings!))) continue;
             recs.Add(rec);
         }
 

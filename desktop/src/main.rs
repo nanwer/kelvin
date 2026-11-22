@@ -7,6 +7,7 @@
 
 mod peer;
 mod screen;
+mod tray_temp;
 
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
@@ -273,10 +274,33 @@ fn update_tray(app: AppHandle, profiles: Vec<TrayProfile>, active: String, autom
     let menu = tray_menu(&app, &profiles, &active, automatic).map_err(|e| e.to_string())?;
     if let Some(tray) = app.tray_by_id("main") {
         tray.set_menu(Some(menu)).map_err(|e| e.to_string())?;
-        let name = profiles.iter().find(|p| p.id == active).map(|p| p.name.as_str()).unwrap_or("");
-        let _ = tray.set_tooltip(Some(if name.is_empty() { "Kelvin".to_string() } else { format!("Kelvin · {name}") }));
     }
     Ok(())
+}
+
+/// The temperature the tray icon shows now, rounded, or i32::MIN while it shows Kelvin's own icon.
+static TRAY_SHOWS: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(i32::MIN);
+
+/// Called by the UI as readings change: the temperature to draw on the tray icon (none puts
+/// Kelvin's own icon back) and the text shown when the pointer rests on it.
+#[tauri::command]
+fn set_tray_status(app: AppHandle, temp: Option<f64>, tooltip: String) -> Result<(), String> {
+    let Some(tray) = app.tray_by_id("main") else { return Ok(()) };
+    let shows = match temp {
+        Some(t) if t.is_finite() => t.round().clamp(0.0, 99.0) as i32,
+        _ => i32::MIN,
+    };
+    if TRAY_SHOWS.swap(shows, Ordering::Relaxed) != shows {
+        let icon = if shows == i32::MIN {
+            app.default_window_icon().cloned()
+        } else {
+            Some(tauri::image::Image::new_owned(tray_temp::render(shows as f64), tray_temp::SIZE, tray_temp::SIZE))
+        };
+        tray.set_icon(icon).map_err(|e| e.to_string())?;
+    }
+    // Windows cuts a tray tooltip off at 127 characters; cut it on a whole character first.
+    let text: String = tooltip.chars().take(120).collect();
+    tray.set_tooltip(Some(if text.is_empty() { "Kelvin".to_string() } else { text })).map_err(|e| e.to_string())
 }
 
 /// Turns on "Start Kelvin with Windows" the first time the installed app runs, so fan curves and
@@ -304,7 +328,7 @@ fn main() {
         // Windows notifications for temperature alerts. The service decides when to alert (it runs
         // without a desktop); this app, running in the tray, shows them.
         .plugin(tauri_plugin_notification::init())
-        .invoke_handler(tauri::generate_handler![check_for_update, install_update, update_tray, start_service])
+        .invoke_handler(tauri::generate_handler![check_for_update, install_update, update_tray, set_tray_status, start_service])
         // A second launch (e.g. clicking the shortcut again) brings the existing window forward.
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| show_main(app)))
         .plugin(tauri_plugin_autostart::init(

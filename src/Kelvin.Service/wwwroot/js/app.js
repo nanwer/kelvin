@@ -7,6 +7,7 @@ const ROUTES = [
   { id: 'fans', label: 'Fans' },
   { id: 'lighting', label: 'Lighting' },
   { id: 'profiles', label: 'Profiles' },
+  { id: 'history', label: 'History' },
   { id: 'health', label: 'Health' },
   { id: 'advice', label: 'Advice' },
   { id: 'settings', label: 'Settings' },
@@ -300,6 +301,45 @@ async function syncTray(s) {
   } catch { trayKey = ''; } // retry on the next update
 }
 
+// The tray icon can show a temperature as a number, and its tooltip lists the rest. Which
+// temperature is this person's choice on this PC, so it lives with the app, not the service.
+const TRAY_CHOICES = ['cpu', 'gpu', 'hottest', 'off'];
+export function getTrayTemp() {
+  try { const v = localStorage.getItem('kelvin.trayTemp'); return TRAY_CHOICES.includes(v) ? v : 'cpu'; }
+  catch { return 'cpu'; }
+}
+export function setTrayTemp(v) {
+  try { localStorage.setItem('kelvin.trayTemp', v); } catch { /* storage off: it lasts until the app closes */ }
+  trayStatusKey = '';
+  if (state) syncTrayStatus(state);
+}
+
+let trayStatusKey = '';
+let trayStatusAt = 0;
+function syncTrayStatus(s) {
+  if (!tauriInvoke) return;
+  const temp = (role) => s?.sensors.find((x) => x.primary && x.kind === 'temperature' && x.role === role)?.value;
+  let shown = null, tooltip = 'Kelvin · service not running';
+  if (s) {
+    const cpu = temp('cpu'), gpu = temp('gpu');
+    const choice = getTrayTemp();
+    const value = choice === 'cpu' ? cpu ?? gpu : choice === 'gpu' ? gpu ?? cpu
+      : choice === 'hottest' ? (cpu == null && gpu == null ? null : Math.max(cpu ?? -Infinity, gpu ?? -Infinity)) : null;
+    shown = value == null || !isFinite(value) ? null : Math.round(value);
+    const profile = s.profiles?.find((p) => p.id === s.activeProfileId)?.name;
+    const temps = [cpu != null && `CPU ${Math.round(cpu)}°C`, gpu != null && `GPU ${Math.round(gpu)}°C`].filter(Boolean).join(' · ');
+    // Fan speeds to the nearest 50, so the tooltip isn't rewritten for every flicker of a reading.
+    const spinning = s.fans.filter((f) => f.rpm > 0).slice(0, 3).map((f) => `${f.name} ${Math.round(f.rpm / 50) * 50} rpm`).join(' · ');
+    tooltip = [`Kelvin${profile ? ` · ${profile}` : ''}`, temps, spinning].filter(Boolean).join('\n');
+  }
+  const key = `${shown}|${tooltip}`;
+  // At most once every two seconds, except when the number on the icon itself changes.
+  if (key === trayStatusKey || (Date.now() - trayStatusAt < 2000 && key.split('|')[0] === trayStatusKey.split('|')[0])) return;
+  trayStatusKey = key;
+  trayStatusAt = Date.now();
+  tauriInvoke('set_tray_status', { temp: shown, tooltip }).catch(() => { trayStatusKey = ''; });
+}
+
 if (window.__TAURI__?.event) {
   window.__TAURI__.event.listen('tray-profile', (e) =>
     api('PUT', '/profiles/active', { id: e.payload }).catch((err) => toast(err.message, true)));
@@ -326,6 +366,7 @@ function onState(next) {
   updateSafetyNotice(state);
   renderProfileSwitch(state);
   syncTray(state);
+  syncTrayStatus(state);
   if (first) { route(); }
   else current?.view.update(state);
   const navKey = `${parseHash().id}|${state.recommendations.length}`;
@@ -341,6 +382,7 @@ function connect() {
   ws.onmessage = (e) => onState(JSON.parse(e.data));
   ws.onclose = () => {
     connected = false;
+    syncTrayStatus(null);
     renderStatus();
     setTimeout(connect, retryMs);
     retryMs = Math.min(retryMs * 1.6, 15000);

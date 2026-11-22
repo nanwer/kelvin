@@ -10,6 +10,7 @@ namespace Kelvin.Core;
 public static class SettingsRules
 {
     public const double MinCriticalTemp = 70, MaxCriticalCpuTemp = 95, MaxCriticalGpuTemp = 100;
+    public const double MinTargetTemp = 45, MaxTargetTemp = 85;
     public const int MaxNameLength = 200, MaxEntries = 64, MaxCurvePoints = 32, MaxDismissed = 200;
 
     public static void Normalize(KelvinSettings s)
@@ -73,6 +74,7 @@ public static class SettingsRules
         f.FixedPercent = Math.Clamp(Finite(f.FixedPercent, defaults.FixedPercent), 0, 100);
         f.MinPercent = Math.Clamp(Finite(f.MinPercent, defaults.MinPercent), 0, 60);
         f.SmoothSeconds = Math.Clamp(Finite(f.SmoothSeconds, defaults.SmoothSeconds), 0, 120);
+        f.TargetTemp = Math.Clamp(Finite(f.TargetTemp, defaults.TargetTemp), MinTargetTemp, MaxTargetTemp);
         var points = (f.Points ?? []).Where(p => p is not null && double.IsFinite(p.Temp) && double.IsFinite(p.Percent)).Take(MaxCurvePoints).ToList();
         if (f.Mode == FanMode.Curve)
         {
